@@ -1,0 +1,4 @@
+module CRelayObserver [system] {
+    header "include/relay_observer.h"
+    export *
+}

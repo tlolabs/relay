@@ -1,0 +1,4 @@
+module CRelayCore [system] {
+    header "include/relay_core.h"
+    export *
+}

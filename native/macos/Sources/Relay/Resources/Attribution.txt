@@ -1,0 +1,19 @@
+RELAY 0.1.0 — third-party attribution
+
+TMDB API
+This product uses the TMDB API but is not endorsed or certified by TMDB.
+https://www.themoviedb.org
+https://developer.themoviedb.org/docs/faq
+
+TMDB logo (tmdb.svg / TMDB.svg)
+Author: Travis Bell. Used unchanged, with its original colors and aspect ratio.
+Official source:
+https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg
+Retrieved from the unchanged Wikimedia Commons mirror:
+https://commons.wikimedia.org/wiki/File:Tmdb.new.logo.svg
+https://upload.wikimedia.org/wikipedia/commons/8/89/Tmdb.new.logo.svg
+License: Creative Commons Attribution-ShareAlike 4.0 International
+https://creativecommons.org/licenses/by-sa/4.0/
+
+RELAY uses the SQLite library supplied by macOS.
+https://sqlite.org/copyright.html

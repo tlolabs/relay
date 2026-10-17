@@ -1,0 +1,12 @@
+[workspace]
+members = ["crates/relay-observer-core", "crates/relay-core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.1"
+edition = "2024"
+license = "MIT"
+
+[profile.release]
+lto = true
+codegen-units = 1
