@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='relay-app-smoke-') as temp:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     result = json.loads((root / 'result.json').read_text())
     job = result['jobs'][0]
-    assert result['version'] == '0.1.0'
+    assert result['version'] == '0.2.0'
     assert job['state'] == 'complete'
     assert job.get('iflicksId') is None, 'Smoke must never contact real iFlicks'
     assert not (root / 'intake/Original fixture.mp4').exists()
@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='relay-app-smoke-') as temp:
     assert Path(job['subtitles'][0]['retainedPath']).read_bytes() == subtitle
     kinds = {event['event'] for event in result['events']}
     assert {'discovered', 'batch_approved', 'prepared', 'output_attested', 'complete'} <= kinds
-    for image in ['relay.png', 'review.png', 'preview.png']:
+    for image in ['relay.png', 'review.png', 'preview.png', 'search.png', 'sources.png', 'plex-error.png', 'plex-connected.png', 'api-usage.png']:
         shutil.copy2(root / image, qa / image)
     shutil.copy2(root / 'result.json', qa / 'relay-smoke-state.json')
     summary = {'passed': True, 'core_version': result['version'], 'state': job['state'], 'event_types': sorted(kinds), 'native_iflicks_queries': False, 'process_exited': True, 'store_lock_released': True, 'screenshot': str(qa / 'relay.png')}

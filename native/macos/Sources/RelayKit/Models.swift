@@ -26,7 +26,7 @@ public struct MediaIdentity: Codable, Equatable, Sendable {
     }
     public var display: String {
         if kind == "movie" { return "\(title) (\(year.map(String.init) ?? "Year?"))" }
-        if kind == "tv" { return "\(title)\(year.map { " (\($0))" } ?? "") · S\(season ?? 0)E\(episode ?? 0) · \(episodeTitle)" }
+        if kind == "tv" { return "\(title)\(year.map { " (\($0))" } ?? "") · S\(season.map(String.init) ?? "?")E\(episode.map(String.init) ?? "?") · \(episodeTitle)" }
         return "Identity needs review"
     }
     public var group: String { kind == "movie" ? "Movies" : title.isEmpty ? "Needs identity" : "\(title)\(year.map { " (\($0))" } ?? "")" }
@@ -40,6 +40,8 @@ public struct Subtitle: Codable, Identifiable, Equatable, Sendable {
     public var retainedPath: String?; public var targetPath: String?; public var publishedPath: String?
 }
 public struct RelayJob: Codable, Identifiable, Sendable {
+    public var direct: DirectDraft?
+    public var options: DirectDraft { direct ?? DirectDraft() }
     public var id: String; public var originalPath: String; public var currentPath: String
     public var fingerprint: FileFingerprint; public var identity: MediaIdentity; public var subtitles: [Subtitle]
     public var included: Bool; public var revision: UInt64; public var state: String; public var message: String
@@ -50,7 +52,7 @@ public struct RelayJob: Codable, Identifiable, Sendable {
     public var editable: Bool { ["needs_review", "excluded", "source_changed"].contains(state) }
     public var filename: String { URL(fileURLWithPath: currentPath).lastPathComponent }
     public var stateLabel: String { state.replacingOccurrences(of: "_", with: " ").capitalized }
-    public var needsAttention: Bool { ["source_changed", "recovery_needed", "submission_uncertain", "processing_failed", "awaiting_output", "output_verified", "reconciliation_failed"].contains(state) }
+    public var needsAttention: Bool { if options.backend && options.trashSource && state == "complete" && options.trashPath == nil { return true }; return ["direct_failed", "direct_interrupted", "source_changed", "recovery_needed", "submission_uncertain", "processing_failed", "awaiting_output", "output_verified", "reconciliation_failed"].contains(state) }
 }
 public struct RelayConfig: Codable, Sendable {
     public var roots: [String]; public var recursive: Bool; public var outputFolder: String

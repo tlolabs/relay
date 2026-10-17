@@ -1,0 +1,23 @@
+{
+  "target": "x86_64-apple-darwin",
+  "deployment_target": "14.0",
+  "sources": [
+    {
+      "name": "ffmpeg",
+      "version": "8.1.2",
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+      "archive": "ffmpeg-8.1.2.tar.xz",
+      "directory": "ffmpeg-8.1.2",
+      "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+    },
+    {
+      "name": "mediainfo",
+      "version": "26.10",
+      "includes": ["MediaInfoLib 26.10", "ZenLib 0.4.41"],
+      "url": "https://mediaarea.net/download/binary/mediainfo/26.10/MediaInfo_CLI_26.10_GNU_FromSource.tar.gz",
+      "archive": "MediaInfo_CLI_26.10_GNU_FromSource.tar.gz",
+      "directory": "MediaInfo_CLI_GNU_FromSource",
+      "sha256": "10fd865fe588a459e28a0a8b9e738d25df47bd1fc3d5430ac6d0e01323016a4d"
+    }
+  ]
+}

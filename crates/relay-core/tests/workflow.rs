@@ -477,3 +477,240 @@ fn queue_removal_preserves_last_progress_and_requests_output_review() {
     assert_eq!(final_job["progress"], 90);
     assert!(final_job["output_path"].is_null());
 }
+
+#[test]
+fn output_artwork_preflight_is_read_only_and_rejects_another_jobs_output() {
+    let mut f = Fixture::new();
+    let first = f.add("First", false);
+    let second = f.add("Second", false);
+    f.identify(&first, "Show", 1);
+    f.identify(&second, "Show", 2);
+    f.prepare(&first["id"]);
+    f.prepare(&second["id"]);
+    let output = f.output.join("Finished.mp4");
+    fs::write(&output, b"finished video").unwrap();
+    let before = f.job(&first["id"]);
+    let fp = f
+        .core
+        .command(json!({"command":"check_output","id":first["id"],"path":output}))
+        .unwrap();
+    assert_eq!(fp["size"], 14);
+    assert_eq!(before, f.job(&first["id"]));
+    f.core
+        .command(json!({"command":"confirm_output","id":first["id"],"path":output}))
+        .unwrap();
+    assert!(
+        f.core
+            .command(json!({"command":"check_output","id":second["id"],"path":output}))
+            .unwrap_err()
+            .contains("assigned to another job")
+    );
+    let input = f.job(&second["id"])["current_path"].clone();
+    assert!(
+        f.core
+            .command(json!({"command":"check_output","id":second["id"],"path":input}))
+            .unwrap_err()
+            .contains("not the prepared input")
+    );
+}
+
+#[test]
+fn direct_jobs_require_fresh_approval_and_never_rename_inputs() {
+    let mut f = Fixture::new();
+    let old = f.add("Direct original", true);
+    f.identify(&old, "A Show", 1);
+    let job = f.job(&old["id"]);
+    f.core.command(json!({"command":"edit","id":job["id"],"revision":job["revision"],"direct":{"filename":"Chosen output.mp4","metadata":{"description":"","comment":"manual"},"overrides":["description","comment"]}})).unwrap();
+    let preview = f
+        .core
+        .command(json!({"command":"direct_preview","ids":[job["id"]]}))
+        .unwrap();
+    assert_eq!(preview["errors"], json!([]));
+    f.core
+        .command(json!({"command":"direct_approve","token":preview["token"]}))
+        .unwrap();
+    assert!(f.intake.join("Direct original.mp4").exists());
+    let active = f
+        .core
+        .command(json!({"command":"direct_begin","id":job["id"]}))
+        .unwrap();
+    assert!(f.intake.join("Direct original.mp4").exists());
+    assert!(
+        active["direct"]["temporary"]
+            .as_str()
+            .is_some_and(|p| std::path::Path::new(p).exists())
+    );
+    assert!(
+        f.core
+            .command(json!({"command":"direct_cleanup_check","id":job["id"]}))
+            .is_err()
+    );
+    let store = f.dir.path().join("state/jobs.sqlite");
+    drop(f.core);
+    f.core = Core::open(&store).unwrap();
+    let recovered = f.job(&job["id"]);
+    assert_eq!(recovered["state"], "direct_interrupted");
+    assert_eq!(recovered["direct"]["metadata"]["description"], "");
+    assert!(
+        f.core
+            .command(json!({"command":"direct_begin","id":job["id"]}))
+            .is_err()
+    );
+    f.core
+        .command(json!({"command":"direct_retry","id":job["id"]}))
+        .unwrap();
+    assert_eq!(f.job(&job["id"])["state"], "needs_review");
+}
+
+#[test]
+fn direct_collision_and_changed_source_keep_originals() {
+    let mut f = Fixture::new();
+    let old = f.add("Original", false);
+    f.identify(&old, "Show", 1);
+    let job = f.job(&old["id"]);
+    f.core.command(json!({"command":"edit","id":job["id"],"revision":job["revision"],"direct":{"filename":"Occupied.mp4"}})).unwrap();
+    fs::write(f.output.join("Occupied.mp4"), b"unrelated").unwrap();
+    let preview = f
+        .core
+        .command(json!({"command":"direct_preview","ids":[job["id"]]}))
+        .unwrap();
+    assert!(!preview["errors"].as_array().unwrap().is_empty());
+    assert!(
+        f.core
+            .command(json!({"command":"direct_approve","token":preview["token"]}))
+            .is_err()
+    );
+    fs::remove_file(f.output.join("Occupied.mp4")).unwrap();
+    let preview = f
+        .core
+        .command(json!({"command":"direct_preview","ids":[job["id"]]}))
+        .unwrap();
+    fs::write(f.intake.join("Original.mp4"), b"producer resumed writing").unwrap();
+    assert!(
+        f.core
+            .command(json!({"command":"direct_approve","token":preview["token"]}))
+            .is_err()
+    );
+    assert!(f.intake.join("Original.mp4").exists());
+}
+
+#[test]
+fn subtitle_edge_cases_and_post_preview_collisions_preserve_safety() {
+    let mut f = Fixture::new();
+    let mut mp4 = Vec::from(&b"\x00\x00\x00\x08ftyp\x00\x00\x00\x74moov\x00\x00\x00\x6cmvhd"[..]);
+    mp4.extend_from_slice(&[0u8; 100]);
+    mp4[36..40].copy_from_slice(&1u32.to_be_bytes());
+    fs::write(f.intake.join("Episode.mp4"), &mp4).unwrap();
+    fs::write(f.intake.join("Episode.en.srt"), b"").unwrap();
+    let outside = f.dir.path().join("outside.srt");
+    fs::write(&outside, b"1\n00:00:00,000 --> 00:00:01,000\nOutside\n").unwrap();
+    std::os::unix::fs::symlink(&outside, f.intake.join("Episode.fr.srt")).unwrap();
+
+    // Symlinked companion SRT must be skipped without aborting discovery.
+    let snap = f.core.command(json!({"command":"discover"})).unwrap();
+    let job = snap["jobs"].as_array().unwrap()[0].clone();
+    assert_eq!(job["subtitles"].as_array().unwrap().len(), 1);
+
+    f.identify(&job, "Show", 1);
+    let job = f.job(&job["id"]);
+
+    // 0-byte provisional companion SRT must be rejected during preview and direct_preview.
+    let preview = f
+        .core
+        .command(json!({"command":"preview","ids":[job["id"]]}))
+        .unwrap();
+    assert!(!preview["errors"].as_array().unwrap().is_empty());
+    let direct_preview = f
+        .core
+        .command(json!({"command":"direct_preview","ids":[job["id"]]}))
+        .unwrap();
+    assert!(!direct_preview["errors"].as_array().unwrap().is_empty());
+
+    // Populate valid subtitle and inspect job.
+    fs::write(
+        f.intake.join("Episode.en.srt"),
+        b"1\n00:00:00,000 --> 00:00:01,000\nValid\n",
+    )
+    .unwrap();
+    f.core.command(json!({"command":"discover"})).unwrap();
+    let job = f.job(&job["id"]);
+    let inspected = f
+        .core
+        .command(json!({
+            "command":"direct_inspect",
+            "id":job["id"],
+            "revision":job["revision"],
+            "default_streaming":false,
+            "default_trash":false,
+            "inspection":{
+                "streams":[{"index":0,"kind":"video","codec":"h264","language":"und","default":true,"forced":false,"attached_pic":false},{"index":1,"kind":"audio","codec":"aac","language":"eng","default":true,"forced":false,"attached_pic":false}],
+                "chapters":[],
+                "rule_media":[{"format":"AVC","height":1080,"width":1920,"profile":"High"}],
+                "duration":2.0
+            }
+        }))
+        .unwrap();
+    assert!(!inspected["direct"]["inspection"].is_null());
+    assert_eq!(inspected["direct"]["streaming"], false);
+    assert_eq!(inspected["direct"]["trash_source"], false);
+
+    // Post-preview output collision must block direct_approve.
+    let dp = f
+        .core
+        .command(json!({"command":"direct_preview","ids":[job["id"]]}))
+        .unwrap();
+    assert_eq!(dp["errors"], json!([]));
+    let target = PathBuf::from(dp["actions"][0]["target"].as_str().unwrap());
+    fs::write(&target, b"occupied after preview").unwrap();
+    assert!(
+        f.core
+            .command(json!({"command":"direct_approve","token":dp["token"]}))
+            .is_err()
+    );
+    fs::remove_file(&target).unwrap();
+
+    // If subtitle becomes 0-byte after approval (or if retention fails in direct_begin), no staging file may leak.
+    let dp2 = f
+        .core
+        .command(json!({"command":"direct_preview","ids":[job["id"]]}))
+        .unwrap();
+    f.core
+        .command(json!({"command":"direct_approve","token":dp2["token"]}))
+        .unwrap();
+    let mut queued = f.job(&job["id"]);
+    fs::write(f.intake.join("Episode.en.srt"), b"").unwrap();
+    let meta = fs::symlink_metadata(f.intake.join("Episode.en.srt")).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    queued["subtitles"][0]["fingerprint"] = json!({
+        "device": meta.dev(),
+        "inode": meta.ino(),
+        "size": meta.len(),
+        "modified_ns": (i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec())).to_string()
+    });
+    f.core
+        .db
+        .put(&format!("job:{}", job["id"].as_str().unwrap()), &queued)
+        .unwrap();
+    assert!(
+        f.core
+            .command(json!({"command":"direct_begin","id":job["id"]}))
+            .is_err()
+    );
+    assert!(
+        fs::read_dir(&f.output)
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|e| !e.file_name().to_string_lossy().starts_with(".relay-"))
+    );
+
+    // Return to review, delete the companion SRT, and verify discover removes it while preserving inspection.
+    f.core
+        .command(json!({"command":"direct_retry","id":job["id"]}))
+        .unwrap();
+    fs::remove_file(f.intake.join("Episode.en.srt")).unwrap();
+    f.core.command(json!({"command":"discover"})).unwrap();
+    let updated = f.job(&job["id"]);
+    assert_eq!(updated["subtitles"].as_array().unwrap().len(), 0);
+    assert!(!updated["direct"]["inspection"].is_null());
+}
+

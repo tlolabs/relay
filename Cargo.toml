@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/relay-observer-core", "crates/relay-core"]
+members = ["crates/relay-observer-core", "crates/relay-core", "crates/relay-media-build"]
 resolver = "2"
 
 [workspace.package]
@@ -10,3 +10,8 @@ license = "MIT"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[workspace.metadata.relay.native-dependencies]
+manifest = "media-dependencies.json"
+builder = "cargo run --locked -p relay-media-build"
+artifacts = ["ffmpeg", "ffprobe", "mediainfo"]

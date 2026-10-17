@@ -1,8 +1,23 @@
 # RELAY plan
 
-Planning snapshot: 2026-10-16, America/Los_Angeles. RELAY Observer 0.2.1 is the separate diagnostic application. RELAY 0.1.0 is now implemented as a separate Intel application. Core, packaged UI and live generated-TV-fixture verification pass, including recovery of an import whose acknowledgement timed out. See the current README for use, recovery controls and verification boundaries. Confirmed requirements follow; integration behavior is verified only where explicitly stated. The release scope below and confirmed choices in section 8 take precedence over older exploratory proposals.
+> **Current Product Scope (RELAY 0.2.0 — 2026-10-17, America/Los_Angeles):**
+> **RELAY is a standalone replacement for iFlicks (`Update Metadata and Rename` workflow), NOT a companion or handoff tool for iFlicks.**
+> RELAY 0.2.0 directly performs media discovery, TV/movie identification, multi-source metadata acquisition and editing, stream-preserving MP4/M4V remuxing (`ffmpeg`/`ffprobe`/`mediainfo` compiled from pinned sources), Apple/QuickTime and extended MP4 tag writing (`mp4ameta` + `plist`), artwork management (display-only for TV, embedded poster for movies), naming-template application, `faststart` streaming optimization, packet-hash and readback verification, retained external subtitle publication, and recoverable macOS Trash cleanup of verified source files. **iFlicks is not required to be installed, running, or invoked.**
+>
+> The sections below preserve the historical 2026-10-16 0.1.0 planning snapshot and Observer behavioral research that informed RELAY's naming thresholds, tag mappings, and Downie 4 intake rules. Where the historical 0.1.0 sections below describe an external iFlicks handoff stage, that stage is superseded by RELAY 0.2.0's standalone direct processing pipeline (see [README.md](README.md) and [docs/RELAY_INDEPENDENT_REVIEW_2026-10-17.md](docs/RELAY_INDEPENDENT_REVIEW_2026-10-17.md)).
 
-## RELAY 0.1.0 implementation and verification
+## RELAY 0.2.0 standalone replacement architecture
+
+- **Standalone pipeline:** Intake discovery (Downie 4 completed files, ignoring `.downiepart` and provisional downloads) → multi-provider identification (TMDB canonical metadata + Trakt, OMDb, TVmaze, TheTVDB, local IMDb index, optional Brave Search, and read-only Plex library context) → user review & Inspector editing (Details, Metadata, Chapters, Tracks, Artwork) → explicit batch preview (`direct_preview`) and approval (`direct_approve`) → staging file creation (`direct_begin`) & subtitle byte retention → stream-preserving `ffmpeg` remux (`-c:v copy -c:a copy`, optional `mov_text` subtitle embedding, optional `+faststart`) → Rust MP4 metadata/artwork write & readback verification (`direct_write_tags`) → `ffprobe` packet-hash & stream/chapter verification (`direct_publish` via `renamex_np(..., RENAME_EXCL)`) → atomic no-replace external `.srt` publication (`reconcile`) → optional recoverable macOS Trash cleanup of the verified source video (`direct_cleanup_check` + `FileManager.trashItem` + `direct_cleanup_record`).
+- **No production iFlicks dependency:** Default intake and output folders (`~/Downloads` and `~/Movies`) do not assume `~/Movies/iFlicks 3` exists. Legacy 0.1.0 jobs in SQLite remain inspectable/recoverable without automatic replay.
+
+---
+
+## Historical 0.1.0 snapshot (2026-10-16)
+
+Planning snapshot: 2026-10-16, America/Los_Angeles. RELAY Observer 0.2.1 is the separate diagnostic application. RELAY 0.1.0 was initially implemented as a separate Intel application before 0.2.0 replaced the external iFlicks stage with standalone direct processing.
+
+### RELAY 0.1.0 implementation and verification (historical)
 
 - Personal Intel macOS 14+ application, with a Rust core, versioned C ABI, SwiftUI and narrow AppKit integration, packaged through SwiftPM and Cargo. No ARM build work.
 - Discover candidates in Downloads or selected intake folders, with optional recursion off by default. Suggest editable TV batches by show and a Movies batch; support per-item identity correction and exclusion. Discovery does not authorize mutations.

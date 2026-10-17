@@ -15,6 +15,7 @@ let package = Package(
             .linkedFramework("Security"), .linkedFramework("AppKit")
         ]),
         .testTarget(name: "RelayKitTests", dependencies: ["RelayKit"]),
+        .testTarget(name: "RelayTests", dependencies: ["Relay", "RelayKit"]),
         .executableTarget(name: "Relay", dependencies: ["RelayKit", "IFlicksCapture"], exclude: ["Resources"], linkerSettings: [
             .unsafeFlags(["-L", rustLibrary, "-lrelay_core", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
             .linkedFramework("AppKit"), .linkedFramework("UserNotifications"), .linkedFramework("ServiceManagement")

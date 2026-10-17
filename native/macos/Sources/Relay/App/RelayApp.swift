@@ -12,12 +12,19 @@ struct RelayApp: App {
                 .onAppear { delegate.model = model }
                 .task {
                     let args = ProcessInfo.processInfo.arguments
-                    let mode = args.contains("--integration-test") ? "--integration-test" : "--smoke-test"
+                    if let index = args.firstIndex(of: "--check-connections"), args.count > index + 1 {
+                        let override = args.firstIndex(of: "--plex-server-url").flatMap { args.count > $0 + 1 ? URL(string: args[$0 + 1]) : nil }
+                        let provider = args.firstIndex(of: "--check-provider").flatMap { args.count > $0 + 1 ? APIProvider(rawValue: args[$0 + 1]) : nil }
+                        await model.runConnectionAudit(report: URL(fileURLWithPath: args[index + 1]), plexOverride: override, only: provider)
+                        return
+                    }
+                    let mode = args.contains("--direct-smoke-test") ? "--direct-smoke-test" : args.contains("--integration-test") ? "--integration-test" : "--smoke-test"
                     let fixture = args.firstIndex(of: mode).flatMap { index in args.count > index + 1 ? URL(fileURLWithPath: args[index + 1]) : nil }
                     if let fixture { try? Data(String(ProcessInfo.processInfo.processIdentifier).utf8).write(to: fixture.appendingPathComponent("process-id")) }
                     await model.initialize(smokeRoot: fixture)
                     if let fixture {
-                        if mode == "--integration-test" { await model.runIFlicksFixture(root: fixture) }
+                        if mode == "--direct-smoke-test" { await model.runDirectSmoke(root: fixture) }
+                        else if mode == "--integration-test" { await model.runIFlicksFixture(root: fixture) }
                         else { await model.runSmoke(root: fixture) }
                     }
                 }
@@ -26,10 +33,10 @@ struct RelayApp: App {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Batch") {
                 Button("Scan Intake") { Task { await model.scan() } }.keyboardShortcut("r", modifiers: .command).disabled(model.busy)
-                Button("Review Batch") { Task { await model.previewBatch() } }.keyboardShortcut(.return, modifiers: .command).disabled(model.busy || model.reviewIds.isEmpty || model.hasUnsavedChanges)
+                Button("Review Batch") { Task { await model.previewBatch() } }.keyboardShortcut(.return, modifiers: .command).disabled(model.busy || model.reviewIds.isEmpty)
             }
         }
-        Settings { SettingsView(model: model) }
+        Settings { ProcessingSettingsView(model: model) }
         MenuBarExtra("RELAY", systemImage: model.attentionCount > 0 ? "tray.full.fill" : "tray") { RelayMenu(model: model) }
     }
 }
@@ -49,7 +56,8 @@ private struct RelayMenu: View {
     weak var model: RelayModel?
     private var terminationSignal: DispatchSourceSignal?
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps: true)
+        NSApp.setActivationPolicy(.regular)
+        if !ProcessInfo.processInfo.arguments.contains("--direct-smoke-test") { NSApp.activate(ignoringOtherApps: true) }
         signal(SIGTERM, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         source.setEventHandler { NSApp.terminate(nil) }; source.resume(); terminationSignal = source

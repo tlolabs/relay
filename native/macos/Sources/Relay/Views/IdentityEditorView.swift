@@ -23,34 +23,20 @@ struct IdentityEditorView: View {
                         }
                         TextField("Episode title", text: $model.draft.episodeTitle)
                     }
-                    if let recent = model.snapshot?.recentIdentities.filter({ $0.kind == "tv" }), !recent.isEmpty {
-                        Menu("Recent shows") { ForEach(Array(recent.enumerated()), id: \.offset) { _, identity in Button("\(identity.title)\(identity.year.map { " (\($0))" } ?? "")") { model.useRecent(identity) } } }
-                    }
                 }.textFieldStyle(.roundedBorder).padding(6)
             }
-            GroupBox("Find with TMDB") {
+            GroupBox("Episode suggestions") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Picker("Search", selection: $model.catalogKind) { Text("TV shows").tag("tv"); Text("Movies").tag("movie") }.pickerStyle(.segmented)
-                    HStack { TextField("Show or movie title", text: $model.searchText).onSubmit { Task { await model.searchCatalog() } }; Button("Search") { Task { await model.searchCatalog() } }.disabled(model.catalogBusy) }
-                    if !model.catalogTitles.isEmpty {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(model.catalogTitles) { title in
-                                    Button("\(title.displayTitle)\(title.year.map { " (\($0))" } ?? "")") { model.chooseCatalogTitle(title) }.buttonStyle(.link)
-                                }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                        }.frame(maxHeight: 130)
-                    }
                     if let context = model.seriesContext {
                         Text("TMDB\(model.seriesContextCached ? " (cached)" : ""): \(context.status ?? "Status unknown") · In production: \(context.inProduction.map { $0 ? "yes" : "no" } ?? "unknown")\(context.nextEpisodeToAir?.airDate.map { " · Next episode \($0)" } ?? "")").font(.caption).foregroundStyle(.secondary)
                     }
                     if model.draft.kind == "tv", model.draft.tmdbId != nil {
-                        HStack { Stepper("Season \(model.season)", value: $model.season, in: 0...200); Button("Load Episodes") { Task { await model.loadEpisodes() } }.disabled(model.catalogBusy) }
+                        HStack { Stepper("Season \(model.season)", value: $model.season, in: 0...200); Button("Load Season") { Task { await model.loadEpisodes() } }; Button("All Seasons") { if let id = model.draft.tmdbId { Task { await model.loadAllEpisodes(id: Int(id)) } } }.disabled(model.catalogBusy) }
                         ForEach(Array(model.suggestions.prefix(3).enumerated()), id: \.offset) { _, suggestion in
-                            Button("Suggested E\(suggestion.episode.episodeNumber): \(suggestion.episode.name)") { model.chooseEpisode(suggestion.episode) }.buttonStyle(.link).help(suggestion.reason)
+                            Button("Suggested S\(suggestion.episode.seasonNumber) E\(suggestion.episode.episodeNumber): \(suggestion.episode.name)") { model.chooseEpisode(suggestion.episode) }.buttonStyle(.link).help(suggestion.reason)
                         }
                         if !model.episodes.isEmpty {
-                            Menu("Choose episode…") { ForEach(model.episodes) { episode in Button("E\(episode.episodeNumber) — \(episode.name)") { model.chooseEpisode(episode) } } }
+                            Menu("Choose episode…") { ForEach(model.episodes) { episode in Button("S\(episode.seasonNumber) E\(episode.episodeNumber) — \(episode.name)") { model.chooseEpisode(episode) } } }
                         }
                         if model.selectedIds.count > 1 { Button("Apply Show to Selected Rows") { Task { await model.applyShowToSelection() } } }
                     }

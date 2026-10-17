@@ -121,6 +121,13 @@ pub fn discover_paths(config: &Config) -> Result<Vec<PathBuf>, String> {
     result.sort();
     Ok(result)
 }
+pub fn ensure_not_symlink(path: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("Refusing to follow symlink: {}", path.display()));
+    }
+    Ok(())
+}
 pub fn companions(video: &Path) -> Result<Vec<Subtitle>, String> {
     let stem = video
         .file_stem()
@@ -134,6 +141,10 @@ pub fn companions(video: &Path) -> Result<Vec<Subtitle>, String> {
             .and_then(|e| e.to_str())
             .is_none_or(|e| !e.eq_ignore_ascii_case("srt"))
         {
+            continue;
+        }
+        let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if meta.file_type().is_symlink() || !meta.is_file() {
             continue;
         }
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");

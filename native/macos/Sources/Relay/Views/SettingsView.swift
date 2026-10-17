@@ -9,8 +9,7 @@ struct SettingsView: View {
     @State private var output = ""
     @State private var recursive = false
     @State private var tmdbToken = ""
-    @State private var plexToken = ""
-    @State private var plexURL = ""
+    @State private var braveToken = ""
     @State private var credentialNotice = ""
     @AppStorage("notifications") private var notifications = true
     @AppStorage("attentionSound") private var sound = false
@@ -20,7 +19,7 @@ struct SettingsView: View {
     @State private var login = false
     @State private var requestingAutomation = false
     var body: some View {
-        TabView {
+        TabView(selection: $model.settingsTab) {
             Form {
                 Section("Intake") {
                     ForEach(Array(roots.enumerated()), id: \.offset) { index, root in
@@ -35,7 +34,7 @@ struct SettingsView: View {
                     Text("Select the folder used by your existing iFlicks rules. RELAY does not change those rules or destinations.").font(.caption).foregroundStyle(.secondary)
                 }
                 Button("Save Folders") { Task { await model.applySettings(RelayConfig(roots: roots, recursive: recursive, outputFolder: output)) } }.disabled(model.busy || roots.isEmpty || output.isEmpty)
-            }.formStyle(.grouped).tabItem { Label("Folders", systemImage: "folder") }
+            }.formStyle(.grouped).tabItem { Label("Folders", systemImage: "folder") }.tag("folders")
             Form {
                 Section("iFlicks Automation") {
                     Text("RELAY imports approved inputs, applies approved identity fields and reads progress. Existing rules and presets remain unchanged.").font(.caption).foregroundStyle(.secondary)
@@ -51,29 +50,26 @@ struct SettingsView: View {
                 Section("TMDB") {
                     SecureField("API Read Access Token", text: $tmdbToken)
                     HStack {
-                        Button("Save TMDB Token") { credential { try CredentialStore.save(tmdbToken, account: "tmdb"); tmdbToken = "" } }.disabled(tmdbToken.isEmpty)
-                        Button("Remove Token") { credential { try CredentialStore.save("", account: "tmdb") } }
+                        Button("Save TMDB Token") { credential { try CredentialStore.save(tmdbToken, account: "tmdb"); tmdbToken = ""; model.invalidateAPIConnection(.tmdb) } }.disabled(tmdbToken.isEmpty)
+                        Button("Remove Token") { credential { try CredentialStore.save("", account: "tmdb"); model.invalidateAPIConnection(.tmdb) } }
                     }
                     Link("Get a TMDB API Read Access Token", destination: URL(string: "https://www.themoviedb.org/settings/api")!)
                     Text("This product uses the TMDB API but is not endorsed or certified by TMDB.").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Plex library context (optional)") {
-                    TextField("Server URL, e.g. http://192.168.1.2:32400", text: $plexURL)
-                    SecureField("Plex token", text: $plexToken)
+                Section("Episode web search (optional)") {
+                    SecureField("Brave Search API key", text: $braveToken)
                     HStack {
-                        Button("Save Plex Connection") {
-                            credential {
-                                guard let url = URL(string: plexURL), ["http", "https"].contains(url.scheme ?? ""), url.host != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw RelayFailure.message("Enter a server URL without credentials or query parameters") }
-                                UserDefaults.standard.set(plexURL, forKey: "plexURL")
-                                if !plexToken.isEmpty { try CredentialStore.save(plexToken, account: "plex"); plexToken = "" }
-                            }
-                        }
-                        Button("Remove Plex Token") { credential { try CredentialStore.save("", account: "plex") } }
+                        Button("Save Search Key") { credential { try CredentialStore.save(braveToken, account: "brave-search"); braveToken = ""; model.invalidateAPIConnection(.brave) } }.disabled(braveToken.isEmpty)
+                        Button("Remove Search Key") { credential { try CredentialStore.save("", account: "brave-search"); model.invalidateAPIConnection(.brave) } }
                     }
-                    Text("Credentials are stored in Keychain. Catalog and Plex context are suggestions; manual identity fields remain available offline.").font(.caption).foregroundStyle(.secondary)
+                    Link("Get a Brave Search API key", destination: URL(string: "https://api-dashboard.search.brave.com")!)
+                    Text("Discovers unfamiliar shows using downloaded episode titles. Sends title clues to Brave Search; TMDB verifies episode names and numbering. Without a key, Relay uses show-title search and saved/recent show catalogs.").font(.caption).foregroundStyle(.secondary)
                 }
                 if !credentialNotice.isEmpty { Text(credentialNotice).font(.caption).foregroundStyle(.secondary) }
-            }.formStyle(.grouped).tabItem { Label("Connections", systemImage: "network") }
+            }.formStyle(.grouped).tabItem { Label("Connections", systemImage: "network") }.tag("connections")
+            PlexLibrarySettings(model: model).tabItem { Label("Plex", systemImage: "server.rack") }.tag("plex")
+            MetadataSourcesSettings(model: model).tabItem { Label("Data Sources", systemImage: "square.stack.3d.up") }.tag("sources")
+            APIUsageSettings(model: model).tabItem { Label("API Usage", systemImage: "chart.bar") }.tag("usage")
             Form {
                 Section("When work needs review") {
                     Toggle("System notifications", isOn: $notifications)
@@ -90,7 +86,7 @@ struct SettingsView: View {
                     }))
                     Text("Closing the main window leaves RELAY in the menu bar. Quitting waits for in-flight operations and closes the job store.").font(.caption).foregroundStyle(.secondary)
                 }
-            }.formStyle(.grouped).tabItem { Label("Attention", systemImage: "bell") }
+            }.formStyle(.grouped).tabItem { Label("Attention", systemImage: "bell") }.tag("attention")
             VStack(alignment: .leading, spacing: 18) {
                 Text("RELAY 0.1.0").font(.title.weight(.semibold))
                 Text("Your reviewed downloads, prepared and tracked through iFlicks.").foregroundStyle(.secondary)
@@ -103,13 +99,12 @@ struct SettingsView: View {
                 Text("TMDB logo by Travis Bell, unchanged. CC BY-SA 4.0; official source mirrored on Wikimedia Commons.").font(.caption).foregroundStyle(.secondary)
                 Link("Logo attribution & license", destination: URL(string: "https://commons.wikimedia.org/wiki/File:Tmdb.new.logo.svg")!)
                 Spacer()
-            }.padding(28).tabItem { Label("About", systemImage: "info.circle") }
-        }.frame(width: 650, height: 570)
+            }.padding(28).tabItem { Label("About", systemImage: "info.circle") }.tag("about")
+        }.frame(width: 760, height: 650)
         .onAppear {
             roots = model.snapshot?.config?.roots ?? []
             output = model.snapshot?.config?.outputFolder ?? ""
             recursive = model.snapshot?.config?.recursive ?? false
-            plexURL = UserDefaults.standard.string(forKey: "plexURL") ?? ""
             login = SMAppService.mainApp.status == .enabled
         }
     }

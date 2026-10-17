@@ -80,10 +80,10 @@ impl Database {
             .first()
             .cloned()
             .unwrap_or_default();
-        if version != "0" && version != "1" {
+        if version != "0" && version != "1" && version != "2" {
             return Err("This database was created by a newer RELAY version".into());
         }
-        db.execute("CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,payload TEXT NOT NULL); PRAGMA user_version=1;")?;
+        db.execute("CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,payload TEXT NOT NULL); PRAGMA user_version=2;")?;
         Ok(db)
     }
     pub fn execute(&self, sql: &str) -> Result<(), String> {

@@ -5,46 +5,65 @@ struct JobDetailView: View {
     @Bindable var model: RelayModel
     let job: RelayJob
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(job.filename).font(.title2.weight(.semibold)).textSelection(.enabled)
-                        Text(job.stateLabel).foregroundStyle(job.needsAttention ? .orange : .secondary)
-                    }
-                    Spacer()
-                    Button { model.reveal(job.outputPath ?? job.currentPath) } label: { Image(systemName: "folder") }.help("Reveal file")
-                }
-                if !job.message.isEmpty { Text(job.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
-                if job.editable {
-                    IdentityEditorView(model: model)
-                    SubtitleChoicesView(model: model, editable: true)
-                    HStack {
-                        Button("Save Review") { Task { await model.saveDraft() } }.buttonStyle(.borderedProminent).disabled(model.busy)
-                        Button("Reload") { model.loadDraft() }.disabled(model.busy)
-                        if model.hasUnsavedChanges { Text("Unsaved changes").font(.caption).foregroundStyle(.orange) }
-                    }
-                    if job.revision != model.draftRevision { Text("The source changed while you were reviewing. Reload before saving.").font(.callout).foregroundStyle(.orange) }
-                } else {
-                    Text(job.identity.display).font(.headline)
-                    if let id = job.iflicksId { LabeledContent("iFlicks ID") { Text(id).font(.caption.monospaced()).textSelection(.enabled) } }
-                    if let percent = job.progress {
-                        ProgressView(value: Double(percent), total: 100) { Text("\(job.iflicksStatus ?? "Observed") · \(percent)%") }
-                    }
-                    SubtitleChoicesView(model: model, editable: ["awaiting_output", "output_verified", "reconciliation_failed", "complete"].contains(job.state))
-                    actions
-                }
-                DisclosureGroup("Paths & history") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        path("Original", job.originalPath)
-                        path("Current input", job.currentPath)
-                        if let output = job.outputPath { path("Confirmed output", output) }
-                        ForEach(Array((model.snapshot?.events ?? []).filter { $0.jobId == job.id }.enumerated()), id: \.offset) { _, event in
-                            Text("\(Date(timeIntervalSince1970: Double(event.timestampMs) / 1000).formatted(date: .omitted, time: .shortened)) · \(event.event)\n\(event.message)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+        VStack(spacing: 0) {
+            if job.editable {
+                CatalogSearchView(model: model).padding(16)
+                Divider()
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(job.filename).font(.title2.weight(.semibold)).textSelection(.enabled)
+                            Text(job.stateLabel).foregroundStyle(job.needsAttention ? .orange : .secondary)
                         }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
-                }
-            }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                        Spacer()
+                        Button { model.reveal(job.outputPath ?? job.currentPath) } label: { Image(systemName: "folder") }.help("Reveal file")
+                    }
+                    if !job.message.isEmpty { Text(job.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
+                    if job.editable {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("1. Confirm identity → 2. Save Review → 3. Review Batch").font(.callout.weight(.medium))
+                            Text("Select the video in the list and press Space to check it in Quick Look. Saving keeps your choices for the final batch review.").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let proposed = model.suggestedIdentity(for: job) {
+                            GroupBox("Suggested from folder search") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(proposed.display).font(.callout)
+                                    Text("Unique exact title match in the checked catalogs. Confirm the show and numbering before saving.").font(.caption).foregroundStyle(.secondary)
+                                    Button("Use Suggested Identity") { model.useFolderSuggestion(proposed) }
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
+                            }
+                        }
+                        IdentityEditorView(model: model)
+                        SubtitleChoicesView(model: model, editable: true)
+                        HStack {
+                            Button("Save Review") { Task { await model.saveDraft() } }.buttonStyle(.borderedProminent).disabled(model.busy)
+                            Button("Reload") { model.loadDraft() }.disabled(model.busy)
+                            if model.hasUnsavedChanges { Text("Unsaved changes").font(.caption).foregroundStyle(.orange) }
+                        }
+                        if job.revision != model.draftRevision { Text("The source changed while you were reviewing. Reload before saving.").font(.callout).foregroundStyle(.orange) }
+                    } else {
+                        Text(job.identity.display).font(.headline)
+                        if let id = job.iflicksId { LabeledContent("iFlicks ID") { Text(id).font(.caption.monospaced()).textSelection(.enabled) } }
+                        if let percent = job.progress {
+                            ProgressView(value: Double(percent), total: 100) { Text("\(job.iflicksStatus ?? "Observed") · \(percent)%") }
+                        }
+                        SubtitleChoicesView(model: model, editable: ["awaiting_output", "output_verified", "reconciliation_failed", "complete"].contains(job.state))
+                        actions
+                    }
+                    DisclosureGroup("Paths & history") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            path("Original", job.originalPath)
+                            path("Current input", job.currentPath)
+                            if let output = job.outputPath { path("Confirmed output", output) }
+                            ForEach(Array((model.snapshot?.events ?? []).filter { $0.jobId == job.id }.enumerated()), id: \.offset) { _, event in
+                                Text("\(Date(timeIntervalSince1970: Double(event.timestampMs) / 1000).formatted(date: .omitted, time: .shortened)) · \(event.event)\n\(event.message)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                    }
+                }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .onAppear { if model.editingId != job.id { model.loadDraft() } }
         .disabled(model.busy)

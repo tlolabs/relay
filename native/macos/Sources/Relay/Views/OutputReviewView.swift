@@ -9,6 +9,9 @@ struct OutputReviewView: View {
             Text("Confirm the finished output").font(.title2.weight(.semibold))
             Text(job.identity.display).font(.headline)
             Text("Choose this job's actual finished video. iFlicks reports the original input path, so RELAY needs your confirmation of the output association.").foregroundStyle(.secondary)
+            if job.identity.kind == "tv" {
+                Text("RELAY will remove embedded cover artwork from this TV output so Plex can choose an episode-specific thumbnail. Video and audio are preserved.").font(.callout).foregroundStyle(.secondary)
+            }
             List(selection: $model.selectedOutput) {
                 ForEach(model.candidates) { candidate in
                     VStack(alignment: .leading, spacing: 3) {

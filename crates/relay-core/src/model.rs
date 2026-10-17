@@ -241,6 +241,8 @@ pub struct Subtitle {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
+    #[serde(default)]
+    pub direct: crate::direct::DirectDraft,
     pub id: String,
     pub original_path: PathBuf,
     pub current_path: PathBuf,

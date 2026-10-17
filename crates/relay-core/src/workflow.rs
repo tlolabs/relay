@@ -45,6 +45,7 @@ impl Core {
         // External effects are journaled before execution. Startup never replays
         // imports or renames; interrupted work is exposed for explicit recovery.
         for mut job in core.jobs()? {
+            core.recover_direct(job.clone())?;
             if job.state == "preparing" {
                 job.state = "recovery_needed".into();
                 job.message =
@@ -70,10 +71,10 @@ impl Core {
     pub fn job(&self, id: &str) -> Result<Job, String> {
         decode(self.db.get(&format!("job:{id}"))?.ok_or("Unknown job")?)
     }
-    fn save(&self, job: &Job) -> Result<(), String> {
+    pub(crate) fn save(&self, job: &Job) -> Result<(), String> {
         self.db.put(&format!("job:{}", job.id), job)
     }
-    fn log(&self, kind: &str, job: Option<&Job>, message: &str) -> Result<(), String> {
+    pub(crate) fn log(&self, kind: &str, job: Option<&Job>, message: &str) -> Result<(), String> {
         self.db.event(
             json!({"event":kind,"job_id":job.map(|j|&j.id),"timestamp_ms":now(),"message":message}),
         )
@@ -87,10 +88,16 @@ impl Core {
     }
     pub fn snapshot(&self) -> Result<Value, String> {
         Ok(
-            json!({"version":"0.1.0","jobs":self.jobs()?,"events":self.db.events()?,"recent_identities":self.db.values("recent:")?,"config":self.db.get("config")?}),
+            json!({"version":"0.2.0","jobs":self.jobs()?,"events":self.db.events()?,"recent_identities":self.db.values("recent:")?,"config":self.db.get("config")?}),
         )
     }
     pub fn command(&mut self, v: Value) -> Result<Value, String> {
+        if v["command"]
+            .as_str()
+            .is_some_and(|c| c.starts_with("direct_"))
+        {
+            return self.direct_command(v);
+        }
         match arg(&v, "command")? {
             "snapshot" => self.snapshot(),
             "configure" => {
@@ -113,9 +120,7 @@ impl Core {
                     r == &config.output_folder
                         || config.recursive && config.output_folder.starts_with(r)
                 }) {
-                    return Err(
-                        "The iFlicks output folder must be outside recursive intake roots".into(),
-                    );
+                    return Err("The output folder must be outside recursive intake roots".into());
                 }
                 self.db.put("config", &config)?;
                 self.snapshot()
@@ -136,6 +141,25 @@ impl Core {
                 }
                 if let Some(identity) = v.get("identity") {
                     job.identity = decode(identity.clone())?;
+                }
+                if let Some(direct) = v.get("direct") {
+                    let draft: crate::direct::DirectDraft = decode(direct.clone())?;
+                    // Never accept external output/cleanup ownership from an editor.
+                    job.direct.metadata = draft.metadata;
+                    job.direct.overrides = draft.overrides;
+                    job.direct.filename = draft.filename;
+                    job.direct.destination = draft.destination;
+                    job.direct.streaming = draft.streaming;
+                    job.direct.trash_source = draft.trash_source;
+                    job.direct.embed_subtitles = draft.embed_subtitles;
+                    job.direct.artwork_fingerprint = if draft.artwork_path.is_empty() {
+                        None
+                    } else {
+                        Some(Fingerprint::read(Path::new(&draft.artwork_path))?)
+                    };
+                    job.direct.artwork_path = draft.artwork_path;
+                    job.direct.artwork_url = draft.artwork_url;
+                    job.direct.tracks = draft.tracks;
                 }
                 if let Some(included) = v["included"].as_bool() {
                     job.included = included;
@@ -232,7 +256,9 @@ impl Core {
                             .into(),
                     );
                 }
-                let path = fs::canonicalize(arg(&v, "path")?).map_err(|e| e.to_string())?;
+                let raw = arg(&v, "path")?;
+                ensure_not_symlink(Path::new(raw))?;
+                let path = fs::canonicalize(raw).map_err(|e| e.to_string())?;
                 subtitle_bytes(&path)?;
                 if job.subtitles.iter().any(|s| s.original_path == path) {
                     return Err("That subtitle is already attached".into());
@@ -365,7 +391,7 @@ impl Core {
                 self.observe(&v["observation"])?;
                 self.snapshot()
             }
-            "confirm_output" => {
+            "check_output" | "confirm_output" => {
                 let mut job = self.job(arg(&v, "id")?)?;
                 if !matches!(
                     job.state.as_str(),
@@ -381,7 +407,9 @@ impl Core {
                 ) {
                     return Err("Prepare the job before confirming an output".into());
                 }
-                let path = fs::canonicalize(arg(&v, "path")?).map_err(|e| e.to_string())?;
+                let raw = arg(&v, "path")?;
+                ensure_not_symlink(Path::new(raw))?;
+                let path = fs::canonicalize(raw).map_err(|e| e.to_string())?;
                 if !video(&path) {
                     return Err("Select a finished video".into());
                 }
@@ -399,6 +427,9 @@ impl Core {
                 }
                 if path == job.current_path {
                     return Err("Select the finished output, not the prepared input".into());
+                }
+                if v["command"] == "check_output" {
+                    return Ok(json!(fp));
                 }
                 job.output_path = Some(path);
                 job.output_fingerprint = Some(fp);
@@ -461,6 +492,11 @@ impl Core {
         let paths = discover_paths(&config)?;
         let mut jobs = self.jobs()?;
         for path in paths {
+            if jobs.iter().any(|j| {
+                j.output_path.as_ref() == Some(&path) || j.direct.target.as_ref() == Some(&path)
+            }) {
+                continue;
+            }
             if path.to_str().is_none() {
                 return Err("An intake filename is not valid UTF-8; rename or exclude it manually before intake".into());
             }
@@ -483,19 +519,28 @@ impl Core {
                                 .any(|old| old.current_path == s.current_path)
                         })
                         .collect();
-                    let mut changed = existing.fingerprint != fp
-                        || existing.current_path != path
-                        || !added.is_empty();
-                    for sub in &mut existing.subtitles {
-                        if let Ok(new) = Fingerprint::read(&sub.current_path) {
-                            if new != sub.fingerprint {
-                                sub.fingerprint = new;
-                                changed = true;
-                            }
+                    let video_changed = existing.fingerprint != fp || existing.current_path != path;
+                    let mut changed = video_changed || !added.is_empty();
+                    let before_len = existing.subtitles.len();
+                    existing.subtitles.retain_mut(|sub| {
+                        let Ok(new) = Fingerprint::read(&sub.current_path) else {
+                            return false;
+                        };
+                        if new != sub.fingerprint {
+                            sub.fingerprint = new;
+                            changed = true;
                         }
+                        true
+                    });
+                    if existing.subtitles.len() != before_len {
+                        changed = true;
                     }
                     existing.subtitles.extend(added);
                     if changed {
+                        if video_changed {
+                            existing.direct.inspection = Value::Null;
+                            existing.direct.tracks.clear();
+                        }
                         existing.current_path = path;
                         existing.fingerprint = fp;
                         existing.revision += 1;
@@ -542,6 +587,7 @@ impl Core {
                 }
             }
             let job = Job {
+                direct: Default::default(),
                 id: identifier(),
                 original_path: path.clone(),
                 current_path: path.clone(),
@@ -667,7 +713,7 @@ impl Core {
         self.db.put(&format!("preview:{token}"), &preview)?;
         Ok(preview)
     }
-    fn check_target(
+    pub(crate) fn check_target(
         &self,
         source: &Path,
         target: &Path,
@@ -685,7 +731,7 @@ impl Core {
         }
         Ok(())
     }
-    fn validate_source(&self, job: &Job) -> Result<(), String> {
+    pub(crate) fn validate_source(&self, job: &Job) -> Result<(), String> {
         if Fingerprint::read(&job.current_path)? != job.fingerprint {
             return Err("Video changed since review. Scan and review again.".into());
         }
@@ -693,9 +739,13 @@ impl Core {
             return Err("An empty video is not ready".into());
         }
         for sub in job.subtitles.iter().filter(|s| s.selected) {
+            if !valid_language(&sub.language) {
+                return Err("Invalid subtitle suffix".into());
+            }
             if Fingerprint::read(&sub.current_path)? != sub.fingerprint {
                 return Err("A selected subtitle changed since review".into());
             }
+            subtitle_bytes(&sub.current_path)?;
         }
         Ok(())
     }
@@ -755,7 +805,16 @@ impl Core {
                 return Err("Batch review is stale; refresh the preview".into());
             }
             self.validate_source(old)?;
-            self.check_target(&old.current_path, &old.video_target()?, &mut targets)?;
+            let target = old.video_target()?;
+            self.check_target(&old.current_path, &target, &mut targets)?;
+            for sub in old.subtitles.iter().filter(|s| s.selected) {
+                let dest = target.with_file_name(format!(
+                    "{}.{}.srt",
+                    target.file_stem().unwrap().to_string_lossy(),
+                    sub.language
+                ));
+                self.check_target(&sub.current_path, &dest, &mut targets)?;
+            }
             self.check_output_collision(old)?;
         }
         let batch = identifier();
@@ -779,7 +838,7 @@ impl Core {
         }
         Ok(())
     }
-    fn retain(&self, job: &mut Job) -> Result<(), String> {
+    pub(crate) fn retain(&self, job: &mut Job) -> Result<(), String> {
         let directory = self.home.join("subtitles").join(&job.id);
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         for sub in job.subtitles.iter_mut().filter(|s| s.selected) {
@@ -997,7 +1056,7 @@ impl Core {
         }
         Ok(())
     }
-    fn reconcile(&self, job: &mut Job) -> Result<(), String> {
+    pub(crate) fn reconcile(&self, job: &mut Job) -> Result<(), String> {
         if !matches!(
             job.state.as_str(),
             "output_verified" | "reconciliation_failed" | "complete"
