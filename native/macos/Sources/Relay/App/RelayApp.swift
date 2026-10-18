@@ -10,6 +10,11 @@ struct RelayApp: App {
         WindowGroup("RELAY", id: "relay") {
             ContentView(model: model)
                 .onAppear { delegate.model = model }
+                .onOpenURL { url in
+                    model.enqueueVideos([url])
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .task {
                     let args = ProcessInfo.processInfo.arguments
                     if let index = args.firstIndex(of: "--check-connections"), args.count > index + 1 {
@@ -29,6 +34,7 @@ struct RelayApp: App {
                     }
                 }
         }.defaultSize(width: 1180, height: 800)
+        .handlesExternalEvents(matching: ["*"])
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Batch") {

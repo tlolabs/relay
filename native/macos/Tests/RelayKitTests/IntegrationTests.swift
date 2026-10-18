@@ -328,12 +328,77 @@ extension IntegrationTests {
 }
 
 final class FullMetadataTests: XCTestCase {
+    private func tvResponse(_ path: String) -> String {
+        if path == "/3/tv/123" {
+            return #"{"id":123,"tagline":"Work the crowd","overview":"Series plot","genres":[{"name":"Comedy"}],"production_companies":[{"name":"Dropout"}],"networks":[{"name":"Dropout"}],"poster_path":"/show.jpg","credits":{"cast":[{"name":"Host"},{"name":"Guest from another episode"}],"crew":[{"name":"Series Producer","job":"Executive Producer"}]},"images":{"posters":[]},"content_ratings":{"results":[{"iso_3166_1":"US","rating":"TV-MA"}]},"keywords":{"results":[{"name":"crowd work"}]}}"#
+        }
+        if path == "/3/tv/123/season/1" {
+            return #"{"id":10,"overview":"Season plot","credits":{"crew":[{"name":"Series Producer","job":"Producer"},{"name":"Season Producer","job":"Producer"}]}}"#
+        }
+        let number = path.hasSuffix("/2") ? 2 : 1
+        return """
+        {"id":\(100 + number),"overview":"Plot \(number)","air_date":"2025-09-\(number == 1 ? "08" : "22")","vote_average":5.8,"vote_count":5,
+         "guest_stars":[{"name":"Guest \(number)"}],"crew":[{"name":"Director \(number)","job":"Director"}],
+         "credits":{"cast":[{"name":"Host"}],"guest_stars":[{"name":"Guest \(number)"}],"crew":[{"name":"Director \(number)","job":"Director"}]}}
+        """
+    }
+    func testEveryEpisodeCombinesSeriesSeasonAndItsOwnCreditsWithoutOtherGuests() async throws {
+        let configuration = URLSessionConfiguration.ephemeral; configuration.protocolClasses = [HTTPStub.self]
+        var requests: [String: Int] = [:]
+        HTTPStub.handler = { request in
+            let path = request.url!.path; requests[path, default: 0] += 1
+            let appended = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "append_to_response" }?.value ?? ""
+            if path.contains("/season/") { XCTAssertFalse(appended.contains("content_ratings")) }
+            return (200, Data(self.tvResponse(path).utf8))
+        }
+        defer { HTTPStub.handler = nil }
+        let client = CatalogClient(session: URLSession(configuration: configuration), usage: testAPIUsage())
+        for number in 1...2 {
+            let value = try await client.fullMetadata(id: 123, kind: "tv", season: 1, episode: number, token: "fixture")
+            XCTAssertEqual(value.fields["tagline"], "Work the crowd")
+            XCTAssertEqual(value.fields["genre"], "Comedy")
+            XCTAssertEqual(value.fields["studio"], "Dropout")
+            XCTAssertEqual(value.fields["network"], "Dropout")
+            XCTAssertEqual(value.fields["contentRating"], "TV-MA")
+            XCTAssertEqual(value.fields["tags"], "crowd work")
+            XCTAssertEqual(value.fields["rating"], "5.8")
+            XCTAssertEqual(value.fields["seasonDescription"], "Season plot")
+            XCTAssertEqual(value.fields["description"], "Plot \(number)")
+            XCTAssertEqual(value.fields["episodeID"], String(format: "S01E%02d", number))
+            XCTAssertEqual(value.fields["actors"], "Host\nGuest \(number)")
+            XCTAssertEqual(value.fields["directors"], "Director \(number)")
+            XCTAssertEqual(value.fields["producers"], "Series Producer\nSeason Producer")
+            XCTAssertEqual(value.artwork, ["https://image.tmdb.org/t/p/w500/show.jpg"])
+            var manual = DirectDraft(); manual.metadata = ["tagline": "", "description": "My plot", "artist": "Original artist"]
+            manual.overrides = ["tagline", "description"]
+            let applied = value.applying(to: manual)
+            XCTAssertEqual(applied.metadata["tagline"], "")
+            XCTAssertEqual(applied.metadata["description"], "My plot")
+            XCTAssertEqual(applied.metadata["artist"], "Original artist")
+            XCTAssertEqual(applied.metadata["actors"], "Host\nGuest \(number)")
+        }
+        XCTAssertEqual(requests["/3/tv/123"], 1)
+        XCTAssertEqual(requests["/3/tv/123/season/1"], 1)
+    }
+    func testMissingAppendedMetadataFailsInsteadOfReturningPartialEpisode() async throws {
+        let configuration = URLSessionConfiguration.ephemeral; configuration.protocolClasses = [HTTPStub.self]
+        HTTPStub.handler = { request in
+            if request.url!.path.contains("/episode/") { return (200, Data(#"{"id":101,"overview":"Partial plot","credits":{"status_code":34,"success":false}}"#.utf8)) }
+            return (200, Data(self.tvResponse(request.url!.path).utf8))
+        }
+        defer { HTTPStub.handler = nil }
+        let client = CatalogClient(session: URLSession(configuration: configuration), usage: testAPIUsage())
+        do {
+            _ = try await client.fullMetadata(id: 123, kind: "tv", season: 1, episode: 1, token: "fixture")
+            XCTFail("Partial metadata must not count as a completed import")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("incomplete metadata")) }
+    }
     func testMovieCreditsRatingsAndPostersUseCanonicalDetailResponse() async throws {
         let configuration=URLSessionConfiguration.ephemeral;configuration.protocolClasses=[HTTPStub.self]
         HTTPStub.handler = { request in
             XCTAssertTrue(request.url!.path.hasSuffix("/movie/123"))
             XCTAssertTrue(request.url!.query!.contains("language=fr-FR"))
-            return (200,Data(#"{"id":123,"overview":"Plot","tagline":"Tagline","release_date":"2025-01-02","poster_path":"/one.jpg","genres":[{"name":"Drama"}],"production_companies":[{"name":"Studio"}],"credits":{"cast":[{"name":"Actor"}],"crew":[{"name":"Director","job":"Director"},{"name":"Producer","job":"Producer"},{"name":"Writer","job":"Screenplay"}]},"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"PG-13"}]}]},"images":{"posters":[{"file_path":"/one.jpg"},{"file_path":"/two.jpg"}]}}"#.utf8))
+            return (200,Data(#"{"id":123,"overview":"Plot","tagline":"Tagline","release_date":"2025-01-02","poster_path":"/one.jpg","genres":[{"name":"Drama"}],"production_companies":[{"name":"Studio"}],"credits":{"cast":[{"name":"Actor"}],"crew":[{"name":"Director","job":"Director"},{"name":"Producer","job":"Producer"},{"name":"Writer","job":"Screenplay"}]},"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"PG-13"}]}]},"keywords":{"keywords":[]},"images":{"posters":[{"file_path":"/one.jpg"},{"file_path":"/two.jpg"}]}}"#.utf8))
         }
         defer { HTTPStub.handler = nil }
         let client=CatalogClient(session:URLSession(configuration:configuration),usage:testAPIUsage())

@@ -10,17 +10,17 @@ public actor MetadataDiscoveryClient {
         http = ProviderHTTP(session: session ?? URLSession(configuration: configuration), usage: usage)
     }
 
-    public func discover(titles: [String], kind: String, seeds: [DiscoverySeed], credentials: DiscoveryCredentials, cache: URL?, enabled: Set<MetadataSource> = Set(MetadataSource.allCases), progress: @Sendable (DiscoveryReport) -> Void = { _ in }) async throws -> DiscoveryReport {
+    public func discover(titles: [String], kind: String, seeds: [DiscoverySeed], credentials: DiscoveryCredentials, cache: URL?, enabled: Set<MetadataSource> = Set(MetadataSource.allCases), progress: @Sendable (DiscoveryReport) -> Void = { _ in }, activity: @escaping DiscoveryActivityHandler = { _ in }) async throws -> DiscoveryReport {
         let clues = EpisodeClues.unique(titles)
-        async let traktResult = enabled.contains(.trakt) ? trakt(clues: clues, kind: kind, key: credentials.trakt, cache: cache) : disabled(.trakt)
-        async let omdbResult = enabled.contains(.omdb) ? omdb(clues: clues, kind: kind, key: credentials.omdb, cache: cache) : disabled(.omdb)
+        async let traktResult = enabled.contains(.trakt) ? trakt(clues: clues, kind: kind, key: credentials.trakt, cache: cache, activity: activity) : disabled(.trakt)
+        async let omdbResult = enabled.contains(.omdb) ? omdb(clues: clues, kind: kind, key: credentials.omdb, cache: cache, activity: activity) : disabled(.omdb)
         let global = await [traktResult, omdbResult]
         try Task.checkCancellation()
         let globalEvidence = global.flatMap(\.evidence)
         progress(DiscoveryReport(evidence: globalEvidence, statuses: global.flatMap(\.statuses)))
         let allSeeds = Array(Set(seeds + globalEvidence.map { DiscoverySeed(title: $0.title, year: $0.year, ids: $0.ids) }))
-        async let mazeResult = enabled.contains(.tvmaze) ? tvmaze(clues: clues, kind: kind, seeds: allSeeds, cache: cache) : disabled(.tvmaze)
-        async let tvdbResult = enabled.contains(.tvdb) ? tvdb(clues: clues, kind: kind, seeds: allSeeds, key: credentials.tvdb, cache: cache) : disabled(.tvdb)
+        async let mazeResult = enabled.contains(.tvmaze) ? tvmaze(clues: clues, kind: kind, seeds: allSeeds, cache: cache, activity: activity) : disabled(.tvmaze)
+        async let tvdbResult = enabled.contains(.tvdb) ? tvdb(clues: clues, kind: kind, seeds: allSeeds, key: credentials.tvdb, cache: cache, activity: activity) : disabled(.tvdb)
         let reports = await [mazeResult, tvdbResult] + global
         try Task.checkCancellation()
         return DiscoveryReport(evidence: Array(Set(reports.flatMap(\.evidence))), statuses: reports.flatMap(\.statuses).sorted { $0.source.rawValue < $1.source.rawValue })

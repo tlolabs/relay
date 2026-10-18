@@ -5,3 +5,6 @@
 .DS_Store
 __pycache__/
 RELAY-observer-*.jsonl
+/iflicks rules/
+/iflicks screenshots/
+/media samples/

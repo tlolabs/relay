@@ -5,7 +5,7 @@ struct BatchPreviewView: View {
     @Bindable var model: RelayModel
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Review the approved batch").font(.title2.weight(.semibold))
+            Text("Review batch before processing").font(.title2.weight(.semibold))
             Text("Start Approved Batch confirms that these downloads are finished and the identities, subtitle associations and exact actions below are correct. Relay will write the approved output files directly without re-encoding video or audio.").foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {

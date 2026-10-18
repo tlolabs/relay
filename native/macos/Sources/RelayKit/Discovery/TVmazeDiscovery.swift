@@ -1,11 +1,13 @@
 import Foundation
 
 extension MetadataDiscoveryClient {
-    func tvmaze(clues: [String], kind: String, seeds: [DiscoverySeed], cache: URL?) async -> DiscoveryReport {
+    func tvmaze(clues: [String], kind: String, seeds: [DiscoverySeed], cache: URL?, activity: @escaping DiscoveryActivityHandler = { _ in }) async -> DiscoveryReport {
         guard kind == "tv" else { return DiscoveryReport(statuses: [ProviderStatus(source: .tvmaze, message: "TV data only", incomplete: false)]) }
         var records: [DiscoveryEvidence] = [], warning: String?, visited = Set<Int>()
         do {
             for seed in seeds {
+                try Task.checkCancellation()
+                await activity(.init(source: "TVmaze", clues: clues, detail: "Checking \(seed.title)"))
                 var results: [[String: Any]] = []
                 let lookup = seed.ids.imdb.map { ["imdb": $0] } ?? seed.ids.tvdb.map { ["thetvdb": String($0)] }
                 if let lookup {
@@ -36,6 +38,7 @@ extension MetadataDiscoveryClient {
                 }
             }
         } catch { warning = failure(error) }
+        await activity(.init(source: "TVmaze", clues: clues, finished: true))
         return report(.tvmaze, records, warning)
     }
 }

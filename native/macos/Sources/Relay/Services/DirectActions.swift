@@ -70,7 +70,10 @@ extension RelayModel {
     }
     func scheduleAutosave() {
         guard !smokeMode, hasUnsavedChanges else { return }
-        if draft.kind == "tv", !draftDirect.overrides.contains("episodeID") { draftDirect.metadata["episodeID"] = String(format:"S%02dE%02d",draft.season ?? 0,draft.episode ?? 0) }
+        if draft.kind == "tv", !draftDirect.overrides.contains("episodeID") {
+            draftDirect.metadata["episodeID"] = String(format:"S%02dE%02d",draft.season ?? 0,draft.episode ?? 0)
+            automaticMetadataFields.insert("episodeID")
+        }
         autosaveTask?.cancel()
         autosaveTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(400)); try Task.checkCancellation(); await self?.persistDraft() } catch {}
@@ -86,7 +89,10 @@ extension RelayModel {
         let explicitIdentity = editedIdentityFields
         let identityKeys = Set(before.keys).union(after.keys).union(explicitIdentity).filter { explicitIdentity.contains($0) || String(describing: before[$0]) != String(describing: after[$0]) }
         let explicitFields = editedMetadataFields
-        let fields = Set(job.options.metadata.keys).union(direct.metadata.keys).filter { explicitFields.contains($0) || job.options.metadata[$0] != direct.metadata[$0] || job.options.overrides.contains($0) != direct.overrides.contains($0) }
+        let fields = Set(job.options.metadata.keys).union(direct.metadata.keys).filter {
+            explicitFields.contains($0) || (!automaticMetadataFields.contains($0) && (job.options.metadata[$0] != direct.metadata[$0] || job.options.overrides.contains($0) != direct.overrides.contains($0)))
+        }
+        let propagateArtwork = !automaticArtwork || direct.overrides.contains("artwork")
         do {
             for item in selected {
                 var nextIdentity = item.identity, nextDirect = item.options
@@ -101,7 +107,7 @@ extension RelayModel {
                     if direct.trashSource != job.options.trashSource { nextDirect.trashSource = direct.trashSource; nextDirect.overrides.insert("trash_source") }
                     if direct.embedSubtitles != job.options.embedSubtitles { nextDirect.embedSubtitles = direct.embedSubtitles }
                     if direct.destination != job.options.destination { nextDirect.destination = direct.destination }
-                    if direct.artworkPath != job.options.artworkPath || direct.artworkUrl != job.options.artworkUrl {
+                    if propagateArtwork && (direct.artworkPath != job.options.artworkPath || direct.artworkUrl != job.options.artworkUrl) {
                         nextDirect.artworkPath = direct.artworkPath; nextDirect.artworkUrl = direct.artworkUrl
                         if direct.overrides.contains("artwork") { nextDirect.overrides.insert("artwork") }
                     }
@@ -118,11 +124,14 @@ extension RelayModel {
         } catch { self.error = "Draft was not saved: \(error.localizedDescription)" }
     }
     func directPreview() async {
+        preview = nil; presentingPreview = false
+        await metadataTask?.value
         autosaveTask?.cancel(); await persistDraft()
         guard !hasUnsavedChanges, let engine else { return }
         let ids = reviewIds
         await perform("Checking the exact output names and processing choices…") {
             try await self.ensureInspected(ids: ids)
+            if !self.smokeMode { try await self.completeCatalogMetadata(ids: ids); self.loadDraft() }
             self.preview = try await engine.execute(["command":"direct_preview","ids":ids])
             self.presentingPreview = true
         }
@@ -131,7 +140,7 @@ extension RelayModel {
         guard let engine, let preview, processingTask == nil else { return }
         await perform("Approving the reviewed queue…") {
             self.snapshot = try await engine.execute(["command":"direct_approve","token":preview.token])
-            self.presentingPreview = false; self.group = "Queue"
+            self.presentingPreview = false; self.group = "Active"
         }
         guard error == nil else { return }
         processingTask = Task { [weak self] in
@@ -185,7 +194,7 @@ extension RelayModel {
     }
     func chooseLocalPoster() {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.jpeg,.png]
-        if panel.runModal() == .OK, let url = panel.url { draftDirect.artworkPath = url.path; draftDirect.overrides.insert("artwork"); scheduleAutosave() }
+        if panel.runModal() == .OK, let url = panel.url { importLocalArtwork(url) }
     }
     func loadNaming() async {
         guard let engine else { return }

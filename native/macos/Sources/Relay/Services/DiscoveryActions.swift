@@ -10,48 +10,93 @@ extension RelayModel {
     func searchCatalog(automatic: Bool = false, filenamesOnly: Bool = false) async {
         guard !catalogBusy, !Task.isCancelled else { return }
         let request = UUID(); catalogRequest = request; catalogBusy = true
+        catalogMessage = "Exploring local file and batch clues…"
+        await prepareLocalEvidence()
+        guard !Task.isCancelled, catalogRequest == request else {
+            if catalogRequest == request { catalogBusy = false; folderSearchInProgress = false }
+            return
+        }
         let kind = filenamesOnly ? "tv" : catalogKind
         let query = filenamesOnly ? "" : searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedShowID = filenamesOnly ? nil : draft.tmdbId
+        let searchJobs = kind == "movie" ? jobs.filter { $0.editable && selectedIds.contains($0.id) } : episodeSearchJobs
+        searchJobClues = Dictionary(uniqueKeysWithValues: searchJobs.map { ($0.id, EpisodeClues.normalized(searchClue(for: $0))) })
+        searchFileNames = Dictionary(uniqueKeysWithValues: searchJobs.map { ($0.id, $0.filename) })
+        activeSearches = [:]; searchedJobIDs = []
+        // A manual movie query can differ from the filename/title.
+        if kind == "movie" { for job in searchJobs { searchJobClues[job.id] = EpisodeClues.normalized(query) } }
+        let activity: DiscoveryActivityHandler = { [weak self] value in
+            await self?.updateSearchActivity(value, request: request)
+        }
+        var finishedSearch = false
+        var catalogs = savedCatalogs()
         let downloadedCount = episodeSearchClues.count
-        let clues = kind == "movie" ? EpisodeClues.unique([query]) : filenamesOnly ? episodeSearchClues : EpisodeClues.unique([query] + episodeSearchClues)
+        var clues = kind == "movie" ? EpisodeClues.unique([query]) : filenamesOnly ? episodeSearchClues : EpisodeClues.unique([query] + episodeSearchClues)
         catalogMessage = "Searching metadata for \(downloadedCount) downloaded episode titles…"
         defer {
             if catalogRequest == request {
-                catalogBusy = false
+                activeSearches = [:]; catalogBusy = false
+                if kind == "tv" {
+                    folderCatalogs = catalogs
+                    rebuildFolderSuggestions()
+                    rebuildMatchConfidence(incomplete: !finishedSearch || searchHasIncompleteChecks)
+                }
                 if filenamesOnly { folderSearchInProgress = false; folderSearchSummary = catalogMessage }
             }
         }
         providerStatuses = []; discoveryIssues = []; catalogEvidence = [:]; catalogTitles = []
-        var catalogs = savedCatalogs()
         showMatches = kind == "tv" ? EpisodeClues.rank(catalogs, clues: clues).filter { !$0.matchedTitles.isEmpty } : []
+        let useLocalPlan = filenamesOnly || query.isEmpty || searchJobs.contains { job in
+            localContext(for: job).map { EpisodeClues.agreement($0.filename.title, query) != .none || EpisodeClues.normalized($0.show ?? "") == EpisodeClues.normalized(query) } ?? false
+        }
+        if kind == "tv", useLocalPlan, !searchJobs.isEmpty,
+           searchJobs.allSatisfy({ job in localContext(for: job).map { LocalMatching.matches($0, catalogs: catalogs).count == 1 } ?? false }) {
+            finishedSearch = true
+            catalogMessage = "Resolved from saved canonical catalogs and local clues. Review before applying."
+            return
+        }
         do {
-            let tmdb = try CredentialStore.read("tmdb") ?? ""
-            let credentials = DiscoveryCredentials(trakt: sourceEnabled(.trakt) ? try CredentialStore.read("trakt") ?? "" : "", omdb: sourceEnabled(.omdb) ? try CredentialStore.read("omdb") ?? "" : "", tvdb: sourceEnabled(.tvdb) ? try CredentialStore.read("tvdb") ?? "" : "")
-            if kind == "tv", plexLoadedAt.map({ Date().timeIntervalSince($0) > 21600 }) ?? true {
-                if UserDefaults.standard.string(forKey: "plexURL")?.isEmpty == false,
-                   plexLastCheckedAt.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
-                    catalogMessage = "Reading Plex shows to help identify this folder…"
-                    await loadPlex()
-                }
-            }
+            let tmdb = try metadataToken()
             try Task.checkCancellation(); guard catalogRequest == request else { return }
             var candidates: [CatalogTitle] = []
+            var local = DiscoveryReport()
+            if sourceEnabled(.imdb), let url = imdbIndexURL {
+                catalogMessage = "Searching the local IMDb index…"
+                do { local = try await imdbIndex.search(titles: clues, kind: kind, index: url, activity: activity) }
+                catch is CancellationError { throw CancellationError() }
+                catch { local = DiscoveryReport(statuses: [ProviderStatus(source: .imdb, message: "Local index unavailable; rebuild it in Settings", incomplete: true)]) }
+            } else { local = DiscoveryReport(statuses: [ProviderStatus(source: .imdb, message: "Disabled in Settings", incomplete: false)]) }
+            await activity(.init(source: "IMDb", clues: [], finished: true))
+            try Task.checkCancellation(); guard catalogRequest == request else { return }
+            if kind == "tv", useLocalPlan {
+                let targeted = try await resolveTargetedCatalogs(catalogs, localRecords: local.evidence, token: tmdb)
+                catalogs = targeted.catalogs
+                for record in local.evidence {
+                    let id = record.ids.tmdb ?? catalogs.first(where: {
+                        record.ids.imdb != nil && $0.imdbID == record.ids.imdb || record.ids.tvdb != nil && $0.tvdbID == record.ids.tvdb
+                    })?.title.id
+                    if let id { catalogEvidence[id, default: []].append(record) }
+                }
+                folderEvidence.merge(catalogEvidence) { _, new in new }
+                try Task.checkCancellation(); guard catalogRequest == request else { return }
+                let unresolved = searchJobs.filter { !targeted.handled.contains($0.id) }
+                if unresolved.isEmpty {
+                    finishedSearch = true; providerStatuses = local.statuses
+                    showMatches = MetadataConsensus.rank(catalogs, clues: clues, evidence: catalogEvidence).filter { !$0.matchedTitles.isEmpty }
+                    catalogMessage = "Compared local clues with targeted TMDB catalogs. Unverified contextual candidates remain provisional."
+                    return
+                }
+                clues = EpisodeClues.unique(unresolved.map { searchClue(for: $0) })
+            }
             if !tmdb.isEmpty, !filenamesOnly, !query.isEmpty {
+                await activity(.init(source: "TMDB", clues: kind == "movie" ? [query] : clues, detail: "Searching \(query)"))
                 do { candidates = try await catalog.search(query, kind: kind, token: tmdb, language: UserDefaults.standard.string(forKey: "metadataLanguage") ?? "en-US") }
                 catch is CancellationError { throw CancellationError() }
                 catch { guard catalogRequest == request else { return }; discoveryIssues.append("TMDB title search is unavailable; trying the other sources.") }
             }
             guard catalogRequest == request else { return }
+            await activity(.init(source: "TMDB", clues: [], finished: true))
             catalogTitles = candidates
-            var local = DiscoveryReport()
-            if sourceEnabled(.imdb), let url = imdbIndexURL {
-                catalogMessage = "Searching the local IMDb index…"
-                do { local = try await imdbIndex.search(titles: clues, kind: kind, index: url) }
-                catch is CancellationError { throw CancellationError() }
-                catch { local = DiscoveryReport(statuses: [ProviderStatus(source: .imdb, message: "Local index unavailable; rebuild it in Settings", incomplete: true)]) }
-            } else { local = DiscoveryReport(statuses: [ProviderStatus(source: .imdb, message: "Disabled in Settings", incomplete: false)]) }
-            try Task.checkCancellation(); guard catalogRequest == request else { return }
             var seeds = plexTitles.map { DiscoverySeed(title: $0.title, year: $0.year, ids: DiscoveryIDs(tmdb: $0.tmdbId)) }
             seeds += (snapshot?.recentIdentities ?? []).filter { $0.kind == "tv" }.map { DiscoverySeed(title: $0.title, year: $0.year, ids: DiscoveryIDs(tmdb: $0.tmdbId.map(Int.init))) }
             seeds += candidates.map { DiscoverySeed(title: $0.displayTitle, year: $0.year, ids: DiscoveryIDs(tmdb: $0.id)) }
@@ -59,13 +104,14 @@ extension RelayModel {
             if !query.isEmpty { seeds.append(DiscoverySeed(title: query)) }
             catalogMessage = "Searching episode titles across the enabled sources…"
             let localReport = local
-            let report = try await metadataDiscovery.discover(titles: clues, kind: kind, seeds: seeds, credentials: credentials, cache: cacheFolder, enabled: Set(MetadataSource.allCases.filter(sourceEnabled))) { [weak self] progress in
+            let credentials = DiscoveryCredentials(trakt: sourceEnabled(.trakt) ? try CredentialStore.read("trakt") ?? "" : "", omdb: sourceEnabled(.omdb) ? try CredentialStore.read("omdb") ?? "" : "", tvdb: sourceEnabled(.tvdb) ? try CredentialStore.read("tvdb") ?? "" : "")
+            let report = try await metadataDiscovery.discover(titles: clues, kind: kind, seeds: seeds, credentials: credentials, cache: cacheFolder, enabled: Set(MetadataSource.allCases.filter(sourceEnabled)), progress: { [weak self] progress in
                 Task { @MainActor in
                     guard let self, self.catalogRequest == request, self.catalogBusy, self.providerStatuses.isEmpty else { return }
                     self.providerStatuses = localReport.statuses + progress.statuses
                     self.catalogMessage = "Checking candidate shows with TVmaze and TheTVDB…"
                 }
-            }
+            }, activity: activity)
             try Task.checkCancellation(); guard catalogRequest == request else { return }
             providerStatuses = local.statuses + report.statuses
             let evidence = Array(Set(local.evidence + report.evidence))
@@ -75,7 +121,7 @@ extension RelayModel {
                 return
             }
             catalogMessage = "Comparing source identities with TMDB…"
-            let resolved = try await discoveryResolver.resolve(evidence, token: tmdb)
+            let resolved = try await discoveryResolver.resolve(evidence, token: tmdb, activity: activity)
             try Task.checkCancellation(); guard catalogRequest == request else { return }
             catalogEvidence = resolved.evidence; discoveryIssues += resolved.unresolved
             if kind == "movie" {
@@ -83,27 +129,21 @@ extension RelayModel {
                 catalogTitles = (resolved.titles + candidates).filter { seen.insert($0.id).inserted }.sorted {
                     Set(catalogEvidence[$0.id, default: []].map(\.source)).count > Set(catalogEvidence[$1.id, default: []].map(\.source)).count
                 }
+                for job in searchJobs {
+                    if let best = catalogTitles.first {
+                        matchConfidence[job.id] = MatchConfidence.movie(title: best, query: query, candidates: catalogTitles, evidence: catalogEvidence[best.id, default: []], incomplete: searchHasIncompleteChecks)
+                    } else { matchConfidence[job.id] = MatchConfidence(score: 0, candidate: nil, reasons: ["No verified movie match found."]) }
+                }
+                finishedSearch = true
                 catalogMessage = "Compared \(evidence.count) source records; selections use TMDB's movie metadata."
                 return
             }
             var ids = resolved.titles.map(\.id) + candidates.prefix(5).map(\.id)
-            ids += plexTitles.compactMap(\.tmdbId)
-            ids += (snapshot?.recentIdentities ?? []).filter { $0.kind == "tv" }.compactMap { $0.tmdbId.map(Int.init) }
             if let id = selectedShowID { ids.append(Int(id)) }
-            // Legacy Plex agents sometimes expose no provider IDs.
-            for title in plexTitles where title.tmdbId == nil {
-                try Task.checkCancellation(); guard catalogRequest == request else { return }
-                if let saved = catalogs.first(where: { EpisodeClues.normalized($0.title.displayTitle) == EpisodeClues.normalized(title.title) && (title.year == nil || $0.title.year == title.year) }) { ids.append(saved.title.id) }
-                else {
-                    do { ids += try await catalog.search(title.title, kind: "tv", token: tmdb).filter { EpisodeClues.normalized($0.displayTitle) == EpisodeClues.normalized(title.title) && (title.year == nil || $0.year == title.year) }.map(\.id) }
-                    catch is CancellationError { throw CancellationError() }
-                    catch { guard catalogRequest == request else { return }; discoveryIssues.append("Plex show “\(title.title)” could not be checked with TMDB.") }
-                }
-            }
             // Existing web search remains a user-configured fallback.
             let web = try CredentialStore.read("brave-search") ?? ""
             if !web.isEmpty, evidence.isEmpty {
-                do { ids += try await episodeWebSearch.showIDs(titles: clues, token: web) }
+                do { ids += try await episodeWebSearch.showIDs(titles: clues, token: web, activity: activity) }
                 catch is CancellationError { throw CancellationError() }
                 catch { guard catalogRequest == request else { return }; discoveryIssues.append("Optional web search is unavailable.") }
             }
@@ -114,6 +154,7 @@ extension RelayModel {
                 try Task.checkCancellation(); guard catalogRequest == request else { return }
                 if !(catalogs.first(where: { $0.title.id == id })?.fetchedAt.map({ Date().timeIntervalSince($0) < 21600 }) ?? false) {
                     catalogMessage = "Checking TMDB show \(index + 1) of \(ordered.count)…"
+                    await activity(.init(source: "TMDB", clues: clues, detail: "Checking candidate show \(index + 1) of \(ordered.count)"))
                     do {
                         let value = try await catalog.seriesCatalog(id: id, token: tmdb)
                         cache(value, name: "tv-catalog-\(id).json")
@@ -128,7 +169,9 @@ extension RelayModel {
                 catalogTitles = candidates.filter { title in !showMatches.contains { $0.id == title.id } }
             }
             folderCatalogs = catalogs
-            folderEvidence.merge(resolved.evidence) { _, new in new }
+            if filenamesOnly { folderEvidence = resolved.evidence }
+            else { folderEvidence.merge(resolved.evidence) { _, new in new } }
+            finishedSearch = true
             rebuildFolderSuggestions()
             catalogMessage = "Compared \(downloadedCount) downloaded titles and \(evidence.count) source records. Applied names and numbering come from TMDB."
             if failures > 0 { discoveryIssues.append("\(failures) TMDB catalogs could not refresh; saved catalogs remain available.") }

@@ -141,6 +141,26 @@ pub fn normalized(value: &str) -> String {
         .collect()
 }
 pub fn parse_identity(stem: &str) -> Identity {
+    // Written download titles use the same parser and review workflow as SxxExx.
+    // ASCII case folding preserves the original Unicode byte boundaries.
+    let folded = stem.to_ascii_lowercase();
+    for (start, _) in folded.match_indices("season ") {
+        if start > 0 && folded.as_bytes()[start - 1].is_ascii_alphanumeric() { continue; }
+        let rest = &folded[start + 7..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 { continue; }
+        let season = &rest[..digits];
+        let remainder = rest[digits..].trim_start_matches([' ', ',']);
+        let after = remainder.strip_prefix("episode").or_else(|| remainder.strip_prefix("ep"));
+        let Some(after) = after else { continue };
+        let after = after.trim_start_matches([' ', '.']);
+        let count = after.bytes().take_while(u8::is_ascii_digit).count();
+        if count == 0 { continue; }
+        let episode = &after[..count];
+        let end = stem.len() - after.len() + count;
+        let converted = format!("{}s{}e{}{}", &stem[..start], season, episode, &stem[end..]);
+        return parse_identity(&converted);
+    }
     let lower = stem.to_lowercase();
     let bytes = lower.as_bytes();
     for i in 0..bytes.len() {
@@ -175,9 +195,7 @@ pub fn parse_identity(stem: &str) -> Identity {
                 title,
                 season: lower[i + 1..split].parse().ok(),
                 episode: lower[start..j].parse().ok(),
-                episode_title: stem[original_index + marker.len()..]
-                    .trim_matches(|c: char| c.is_whitespace() || c == '-' || c == '–')
-                    .to_string(),
+                episode_title: clue_display(&stem[original_index + marker.len()..]),
                 ..Default::default()
             };
             if let Some((name, year)) = year_suffix(&result.title) {
@@ -205,10 +223,20 @@ pub fn parse_identity(stem: &str) -> Identity {
         };
     }
     Identity {
-        episode_title: stem.into(),
+        episode_title: clue_display(stem),
         ..Default::default()
     }
 }
+fn clue_display(value: &str) -> String {
+    let value = value.trim_matches(|c: char| c.is_whitespace() || "-–—.,".contains(c));
+    for (left, right) in [('\'', '\''), ('"', '"'), ('‘', '’'), ('“', '”')] {
+        if value.starts_with(left) && value.ends_with(right) && value.len() > left.len_utf8() {
+            return value[left.len_utf8()..value.len() - right.len_utf8()].trim().to_string();
+        }
+    }
+    value.to_string()
+}
+
 fn year_suffix(stem: &str) -> Option<(String, u16)> {
     if let Some(start) = stem.rfind('(') {
         let suffix = &stem[start + 1..];
@@ -242,6 +270,10 @@ pub struct Subtitle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
     #[serde(default)]
+    pub queue_hidden: bool,
+    #[serde(default)]
+    pub source_missing: bool,
+    #[serde(default)]
     pub direct: crate::direct::DirectDraft,
     pub id: String,
     pub original_path: PathBuf,
@@ -267,6 +299,13 @@ pub struct Job {
     pub output_attested_ms: Option<u64>,
 }
 impl Job {
+    pub fn removable(&self) -> bool {
+        self.editable()
+            || self.state == "complete"
+                && !(self.direct.backend
+                    && self.direct.trash_source
+                    && self.direct.trash_path.is_none())
+    }
     pub fn editable(&self) -> bool {
         matches!(
             self.state.as_str(),

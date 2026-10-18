@@ -53,7 +53,7 @@ public actor IMDbIndex {
         progress(count + episodeCount)
         return count + episodeCount
     }
-    public func search(titles: [String], kind: String, index: URL) throws -> DiscoveryReport {
+    public func search(titles: [String], kind: String, index: URL, activity: @escaping DiscoveryActivityHandler = { _ in }) async throws -> DiscoveryReport {
         guard FileManager.default.fileExists(atPath: index.path) else {
             return DiscoveryReport(statuses: [ProviderStatus(source: .imdb, message: "Import the free datasets in Settings to enable local search", incomplete: false)])
         }
@@ -71,6 +71,7 @@ public actor IMDbIndex {
         func number(_ column: Int32) -> Int? { sqlite3_column_type(statement, column) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, column)) }
         for title in EpisodeClues.unique(titles) {
             try Task.checkCancellation()
+            await activity(.init(source: "IMDb", clues: [title], detail: "Searching local index"))
             sqlite3_reset(statement); sqlite3_clear_bindings(statement)
             let normalized = EpisodeClues.normalized(title)
             bind(statement, 1, normalized); bind(statement, 2, normalized)
@@ -85,6 +86,7 @@ public actor IMDbIndex {
             }
             guard status == SQLITE_DONE || limited && status == SQLITE_ROW else { throw RelayFailure.message("Could not query the IMDb index") }
         }
+        await activity(.init(source: "IMDb", clues: titles, finished: true))
         return DiscoveryReport(evidence: Array(Set(result)), statuses: [ProviderStatus(source: .imdb, message: limited ? "Some common-title results were omitted; refine the title" : "\(Set(result).count) matching local records", incomplete: limited)])
     }
     private func bind(_ statement: OpaquePointer?, _ index: Int32, _ text: String) { _ = text.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) } }

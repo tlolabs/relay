@@ -18,8 +18,11 @@ extension RelayModel {
         notice = plexMessage
     }
     func resetPlexConnection() {
-        plexTitles = []; plexLoadedAt = nil; plexLastCheckedAt = nil; plexConnectionVerified = false
+        catalogRefreshTask?.cancel(); catalogRefreshState = CatalogRefreshState()
+        cache(catalogRefreshState, name: "catalog-refresh.json")
+        plexInventory = nil; plexTitles = []; plexLoadedAt = nil; plexLastCheckedAt = nil; plexConnectionVerified = false
         plexMessage = "Not checked. Save and test your Plex connection."
+        if let url = cacheFolder?.appendingPathComponent("plex-inventory.json") { try? FileManager.default.removeItem(at: url) }
         if let url = cacheFolder?.appendingPathComponent("plex-context.json") { try? FileManager.default.removeItem(at: url) }
     }
 
@@ -42,8 +45,11 @@ extension RelayModel {
             plexLoadedAt = nil; plexLastCheckedAt = Date(); plexTitles = []
             plexMessage = error.localizedDescription
             if let existing = cached("plex-context.json", as: PlexCachedContext.self), existing.serverURL == address {
-                plexTitles = existing.titles
+                plexTitles = existing.titles; plexLoadedAt = existing.fetchedAt
                 plexMessage += " Using \(existing.titles.count) cached TV shows from \(existing.fetchedAt.formatted(date: .abbreviated, time: .shortened)); the live connection is not verified."
+            } else if let saved = plexInventory, saved.server == address {
+                plexTitles = saved.shows; plexLoadedAt = saved.fetchedAt
+                plexMessage += " Using the saved episode inventory; the live connection is not verified."
             }
             try? await APIUsageStore.shared.checked(.plex, result: APIConnectionCheck(passed: false, message: plexMessage))
         }

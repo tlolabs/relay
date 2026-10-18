@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 extension MetadataDiscoveryClient {
-    func tvdb(clues: [String], kind: String, seeds: [DiscoverySeed], key: String, cache: URL?) async -> DiscoveryReport {
+    func tvdb(clues: [String], kind: String, seeds: [DiscoverySeed], key: String, cache: URL?, activity: @escaping DiscoveryActivityHandler = { _ in }) async -> DiscoveryReport {
         guard !key.isEmpty else { return missing(.tvdb) }
         var records: [DiscoveryEvidence] = [], warning: String?, visited = Set<Int>()
         do {
@@ -17,6 +17,8 @@ extension MetadataDiscoveryClient {
             }
             let names = kind == "movie" ? clues.map { DiscoverySeed(title: $0) } : seeds
             for seed in names {
+                try Task.checkCancellation()
+                await activity(.init(source: "TheTVDB", clues: kind == "movie" ? [seed.title] : clues, detail: "Checking \(seed.title)"))
                 var candidates: [(Int, String, Int?, DiscoveryIDs)] = []
                 if kind == "tv", let id = seed.ids.tvdb { candidates = [(id, seed.title, seed.year, seed.ids)] }
                 else {
@@ -34,7 +36,7 @@ extension MetadataDiscoveryClient {
                         // Base records include remote IDs absent from some search entries.
                         let response = try await http.request(.tvdb, path: "/movies/\(id)", token: token, cache: cache)
                         let base = (try metadataObject(response.data))["data"] as? [String: Any] ?? [:]
-                        records.append(DiscoveryEvidence(source: .tvdb, recordID: String(id), kind: kind, title: name, year: year, ids: tvdbIDs(base, id: id)))
+                        records.append(DiscoveryEvidence(source: .tvdb, recordID: String(id), kind: kind, title: name, year: year, ids: tvdbIDs(base, id: id), matchedClue: seed.title))
                         continue
                     }
                     var page = 0, hasNext = true
@@ -56,6 +58,7 @@ extension MetadataDiscoveryClient {
                 }
             }
         } catch { tvdbSession = nil; warning = failure(error) }
+        await activity(.init(source: "TheTVDB", clues: clues, finished: true))
         return report(.tvdb, records, warning)
     }
     private func tvdbIDs(_ value: [String: Any], id: Int) -> DiscoveryIDs {

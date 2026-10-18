@@ -66,6 +66,23 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(ranked[0].disagreements.count, 4)
         XCTAssertEqual(ranked[0].catalog.episodes[0].seasonNumber, 2)
     }
+    func testProviderProgressIdentifiesEachQueriedFileClue() async throws {
+        actor ActivityLog {
+            var values: [DiscoverySearchActivity] = []
+            func append(_ value: DiscoverySearchActivity) { values.append(value) }
+        }
+        let log = ActivityLog()
+        DiscoveryHTTPStub.handler = { request in
+            XCTAssertEqual(request.url?.host, "api.trakt.tv")
+            return try self.response([])
+        }
+        let client = MetadataDiscoveryClient(session: session(), usage: testAPIUsage())
+        _ = try await client.discover(titles: ["First Episode", "Second Episode"], kind: "tv", seeds: [], credentials: DiscoveryCredentials(trakt: "key"), cache: nil, enabled: [.trakt], activity: { await log.append($0) })
+        let values = await log.values
+        XCTAssertEqual(values.filter { !$0.finished }.map(\.clues), [["First Episode"], ["Second Episode"]])
+        XCTAssertEqual(values.filter { !$0.finished }.map(\.source), ["Trakt", "Trakt"])
+        XCTAssertTrue(values.last?.finished == true)
+    }
     func testProviderOutageAndNoKeyLeaveOtherProviderEvidenceAvailable() async throws {
         DiscoveryHTTPStub.handler = { request in
             if request.url!.host == "api.trakt.tv" { return (429, ["Retry-After": "60"], Data("private-body".utf8)) }

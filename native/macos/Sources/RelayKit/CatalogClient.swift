@@ -13,6 +13,9 @@ public struct CatalogTitle: Codable, Identifiable, Sendable {
 public struct PlexTitle: Codable, Identifiable, Sendable {
     public var id: String; public var title: String; public var year: Int?; public var guid: String?; public var ordering: String?
     public var tmdbId: Int?
+    public var imdbId: String? = nil
+    public var tvdbId: Int? = nil
+    public var addedAt: Date? = nil
 }
 public struct SeriesContext: Codable, Sendable {
     public struct NextEpisode: Codable, Sendable { public var airDate: String? }
@@ -21,6 +24,7 @@ public struct SeriesContext: Codable, Sendable {
 public actor CatalogClient {
     let session: URLSession
     let usage: APIUsageStore
+    var metadataCache: [String: (date: Date, value: FullCatalogMetadata)] = [:]
     public init(session: URLSession? = nil, usage: APIUsageStore = .shared) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
@@ -34,7 +38,7 @@ public actor CatalogClient {
         if plex {
             request.setValue("com.tlolabs.relay", forHTTPHeaderField: "X-Plex-Client-Identifier")
             request.setValue("RELAY", forHTTPHeaderField: "X-Plex-Product")
-            request.setValue("0.2.0", forHTTPHeaderField: "X-Plex-Version")
+            request.setValue("0.2.1", forHTTPHeaderField: "X-Plex-Version")
         }
         let (data, http) = try await APITransport.send(request, provider: plex ? .plex : .tmdb, session: session, usage: usage)
         guard http.statusCode == 200 else {
@@ -70,20 +74,30 @@ public actor CatalogClient {
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(SeriesContext.self, from: await get(URL(string: "https://api.themoviedb.org/3/tv/\(id)")!, token: token))
     }
-    public func seriesCatalog(id: Int, token: String) async throws -> TVSeriesCatalog {
+    public func seriesCatalog(id: Int, token: String, seasons requested: Set<Int>? = nil, existing: TVSeriesCatalog? = nil) async throws -> TVSeriesCatalog {
         struct Details: Decodable {
             struct Season: Decodable { var seasonNumber: Int }
+            struct IDs: Decodable { var imdbId: String?; var tvdbId: Int? }
             var id: Int; var name: String; var firstAirDate: String?; var seasons: [Season]
+            var status: String?; var inProduction: Bool?; var externalIds: IDs?
         }
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let details = try decoder.decode(Details.self, from: await get(URL(string: "https://api.themoviedb.org/3/tv/\(id)")!, token: token))
-        var all: [EpisodeCandidate] = []
+        let details = try decoder.decode(Details.self, from: await get(URL(string: "https://api.themoviedb.org/3/tv/\(id)?append_to_response=external_ids")!, token: token))
+        var all: [EpisodeCandidate] = existing?.episodes ?? []
+        var dates = existing?.seasonFetchedAt ?? [:]
         // Include specials and every season: title-only batches can span seasons.
-        for season in details.seasons {
+        for season in details.seasons where requested == nil || requested!.contains(season.seasonNumber) {
             try Task.checkCancellation()
-            all += try await episodes(series: id, season: season.seasonNumber, token: token)
+            let values = try await episodes(series: id, season: season.seasonNumber, token: token)
+            all.removeAll { $0.seasonNumber == season.seasonNumber }; all += values
+            dates[season.seasonNumber] = Date()
         }
-        return TVSeriesCatalog(title: CatalogTitle(id: details.id, name: details.name, firstAirDate: details.firstAirDate), episodes: all)
+        var result = TVSeriesCatalog(title: CatalogTitle(id: details.id, name: details.name, firstAirDate: details.firstAirDate), episodes: all)
+        result.fetchedAt = requested == nil ? Date() : existing?.fetchedAt
+        result.status = details.status; result.inProduction = details.inProduction
+        result.imdbID = details.externalIds?.imdbId; result.tvdbID = details.externalIds?.tvdbId
+        result.availableSeasons = details.seasons.map(\.seasonNumber); result.seasonFetchedAt = dates
+        return result
     }
     public func title(id: Int, kind: String, token: String) async throws -> CatalogTitle {
         guard id > 0, !token.isEmpty else { throw RelayFailure.message("A TMDB ID and token are required") }
@@ -129,10 +143,16 @@ public actor CatalogClient {
                         guard guid.hasPrefix("tmdb://") else { return nil }
                         return Int(guid.dropFirst(7).prefix(while: \.isNumber))
                     }.first
-                    result.append(PlexTitle(id: id, title: title, year: entry["year"] as? Int, guid: entry["guid"] as? String, ordering: entry["showOrdering"] as? String, tmdbId: tmdbId))
+                    var show = PlexTitle(id: id, title: title, year: entry["year"] as? Int, guid: entry["guid"] as? String, ordering: entry["showOrdering"] as? String, tmdbId: tmdbId)
+                    show.imdbId = guids.first { $0.hasPrefix("imdb://") }.map { String($0.dropFirst(7)) }
+                    show.tvdbId = guids.first { $0.hasPrefix("tvdb://") }.flatMap { Int($0.dropFirst(7)) }
+                    show.addedAt = (entry["addedAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+                    result.append(show)
                 }}
                 start += entries.count
-                let total = data["totalSize"] as? Int ?? start
+                guard let total = data["totalSize"] as? Int ?? (entries.count < 200 ? start : nil) else {
+                    throw RelayFailure.message("Plex omitted the total for a full page; library completeness is unknown.")
+                }
                 if entries.isEmpty && start < total { throw RelayFailure.message("Plex stopped returning shows before the library was fully loaded. Try Test Connection again.") }
                 if start >= total { break }
                 if start >= 10000 { throw RelayFailure.message("Plex TV library exceeds the 10,000-show lookup limit. The library was not loaded completely.") }

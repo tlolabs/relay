@@ -15,6 +15,7 @@ struct ProcessingSettingsView: View {
     @AppStorage("metadataLanguage") private var language = "en-US"
     @AppStorage("defaultStreaming") private var streaming = true
     @AppStorage("defaultTrash") private var trash = true
+    @AppStorage("completedRetention") private var completedRetention = CompletedRetention.untilQuit.rawValue
     @AppStorage("watchFoldersEnabled") private var watch = true
     @AppStorage("notifications") private var notifications = true
     @AppStorage("attentionSound") private var sound = false
@@ -56,6 +57,12 @@ struct ProcessingSettingsView: View {
     }
     private var processing: some View {
         Form {
+            Section("Completed Videos") {
+                Picker("After processing", selection: $completedRetention) {
+                    ForEach(CompletedRetention.allCases) { policy in Text(policy.title).tag(policy.rawValue) }
+                }
+                Text("Finished entries are removed immediately or kept in Completed until RELAY quits. Quitting clears every queue entry, including unfinished work. Files stay in place. Add a video again with + to restore its saved review or recovery details.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("Update Metadata and Rename") { Toggle("Optimize for Streaming",isOn:$streaming);Toggle("Move source to Trash after verification",isOn:$trash);Text("Video and audio are copied without re-encoding. Input files remain intact until the finished output and selected subtitles have been verified.").font(.caption).foregroundStyle(.secondary) }
             Section("Destination") { Text(output).textSelection(.enabled);Button("Choose Folder…") { if let path = chooseFolder() { output = path } }; Button("Save Destination") { saveFolders() }.disabled(roots.isEmpty || output.isEmpty) }
             Section("Media Dependencies") { Text(dependencyVersions);Text("Compiled from pinned sources by Rust and bundled with Relay. Version pins and SHA-256 checksums live in media-dependencies.json.").font(.caption).foregroundStyle(.secondary) }
@@ -65,7 +72,7 @@ struct ProcessingSettingsView: View {
         Form {
             Toggle("Monitor watched folders",isOn:$watch)
             Section("Folders") { ForEach(roots,id:\.self) { root in HStack { Text(root).textSelection(.enabled);Spacer();Button { roots.removeAll { $0 == root } } label:{ Image(systemName:"minus.circle") } } };Button("Add Folder…") { if let path = chooseFolder(), !roots.contains(path) { roots.append(path) } };Toggle("Include subfolders",isOn:$recursive);Button("Save Watch Folders") { saveFolders() }.disabled(roots.isEmpty || output.isEmpty) }
-            Text("New videos are identified and added to the queue. Review them and press Start when the downloads are finished.").font(.callout).foregroundStyle(.secondary)
+            Text("New videos are identified and added to the queue. When downloads are finished, confirm their identities and press Review… to check the batch before approving processing.").font(.callout).foregroundStyle(.secondary)
         }.formStyle(.grouped)
     }
     private var naming: some View {
@@ -87,7 +94,7 @@ struct ProcessingSettingsView: View {
         }
     }
     private var advanced: some View {
-        Form { Section("Diagnostics") { Button("Export Relay Journal…") { model.exportLogs() };Button("Clear Public Metadata Cache") { model.clearPublicCache() };Text("Jobs, credentials, retained subtitles and the local IMDb index are preserved.").font(.caption).foregroundStyle(.secondary) };Section("About") { Text("RELAY 0.2.0 · Intel macOS 14+");Text("Direct metadata tagging, naming and stream-preserving processing.");Text("Dependency versions and complete build provenance are included in the app’s Resources folder.").font(.caption).foregroundStyle(.secondary) } }.formStyle(.grouped)
+        Form { Section("Diagnostics") { Button("Export Relay Journal…") { model.exportLogs() };Button("Clear Public Metadata Cache") { model.clearPublicCache() };Text("Jobs, credentials, retained subtitles and the local IMDb index are preserved.").font(.caption).foregroundStyle(.secondary) };Section("About") { Text("RELAY 0.2.1 · Intel macOS 14+");Text("Direct metadata tagging, naming and stream-preserving processing.");Text("Dependency versions and complete build provenance are included in the app’s Resources folder.").font(.caption).foregroundStyle(.secondary) } }.formStyle(.grouped)
     }
     private func chooseFolder()->String? { let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;panel.canCreateDirectories=true;return panel.runModal() == .OK ? panel.url?.path : nil }
     private var dependencyVersions: String {

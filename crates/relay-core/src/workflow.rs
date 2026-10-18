@@ -87,8 +87,13 @@ impl Core {
         )
     }
     pub fn snapshot(&self) -> Result<Value, String> {
+        let jobs: Vec<_> = self
+            .jobs()?
+            .into_iter()
+            .filter(|job| !job.queue_hidden && !(job.editable() && job.source_missing))
+            .collect();
         Ok(
-            json!({"version":"0.2.0","jobs":self.jobs()?,"events":self.db.events()?,"recent_identities":self.db.values("recent:")?,"config":self.db.get("config")?}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"jobs":jobs,"events":self.db.events()?,"recent_identities":self.db.values("recent:")?,"config":self.db.get("config")?,"scan":self.db.get("last_scan")?}),
         )
     }
     pub fn command(&mut self, v: Value) -> Result<Value, String> {
@@ -127,6 +132,62 @@ impl Core {
             }
             "discover" => {
                 self.discover()?;
+                self.snapshot()
+            }
+            "remove_jobs" => {
+                let ids = v["ids"].as_array().ok_or("Select videos to remove")?;
+                let mut jobs = Vec::new();
+                for id in ids {
+                    let job = self.job(id.as_str().ok_or("Invalid job ID")?)?;
+                    if !job.removable() {
+                        return Err("Finish or recover processing and source cleanup before removing these videos.".into());
+                    }
+                    jobs.push(job);
+                }
+                self.db.transaction(|| {
+                    for mut job in jobs {
+                        job.queue_hidden = true;
+                        job.revision += 1; // Invalidate any earlier batch preview.
+                        job.updated_ms = now();
+                        self.save(&job)?;
+                        self.log(
+                            "removed_from_queue",
+                            Some(&job),
+                            "Removed from queue; files retained",
+                        )?;
+                    }
+                    Ok(())
+                })?;
+                self.snapshot()
+            }
+            "clear_completed" | "clear_queue" => {
+                let all_entries = v["command"] == "clear_queue";
+                // Retain the journal and file fingerprints so later scans do
+                // not re-import cleared inputs or published outputs. Clearing
+                // a session also archives unfinished work without replaying or
+                // deleting its files; explicit re-adding restores recovery.
+                let jobs = self.jobs()?;
+                self.db.transaction(|| {
+                    for mut job in jobs.into_iter().filter(|job| {
+                        !job.queue_hidden
+                            && (all_entries || job.state == "complete" && job.removable())
+                    }) {
+                        job.queue_hidden = true;
+                        job.revision += 1;
+                        job.updated_ms = now();
+                        self.save(&job)?;
+                        self.log(
+                            if all_entries {
+                                "queue_cleared"
+                            } else {
+                                "completed_cleared"
+                            },
+                            Some(&job),
+                            "Queue entry cleared; files and recovery journal retained",
+                        )?;
+                    }
+                    Ok(())
+                })?;
                 self.snapshot()
             }
             "edit" => {
@@ -490,7 +551,22 @@ impl Core {
     fn discover(&self) -> Result<(), String> {
         let config = self.config()?;
         let paths = discover_paths(&config)?;
+        let video_count = paths.len();
         let mut jobs = self.jobs()?;
+        // Only a successful traversal may hide stale review rows. Keep their
+        // reviews so returning sources can reappear without losing edits.
+        for job in jobs.iter_mut().filter(|j| j.editable()) {
+            let missing = match fs::symlink_metadata(&job.current_path) {
+                Ok(_) => false,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(_) => continue,
+            };
+            if job.source_missing != missing {
+                job.source_missing = missing;
+                job.revision += 1;
+                self.save(job)?;
+            }
+        }
         for path in paths {
             if jobs.iter().any(|j| {
                 j.output_path.as_ref() == Some(&path) || j.direct.target.as_ref() == Some(&path)
@@ -520,7 +596,8 @@ impl Core {
                         })
                         .collect();
                     let video_changed = existing.fingerprint != fp || existing.current_path != path;
-                    let mut changed = video_changed || !added.is_empty();
+                    let mut changed = video_changed || !added.is_empty() || existing.source_missing;
+                    existing.source_missing = false;
                     let before_len = existing.subtitles.len();
                     existing.subtitles.retain_mut(|sub| {
                         let Ok(new) = Fingerprint::read(&sub.current_path) else {
@@ -587,6 +664,8 @@ impl Core {
                 }
             }
             let job = Job {
+                queue_hidden: false,
+                source_missing: false,
                 direct: Default::default(),
                 id: identifier(),
                 original_path: path.clone(),
@@ -619,7 +698,10 @@ impl Core {
             )?;
             jobs.push(job);
         }
-        for mut job in jobs.into_iter().filter(|j| !j.editable()) {
+        for mut job in jobs
+            .into_iter()
+            .filter(|j| !j.editable() && !j.queue_hidden)
+        {
             let mut candidates = Vec::new();
             for source in [&job.original_path, &job.current_path] {
                 if source.parent().is_some_and(|p| p.is_dir()) {
@@ -653,6 +735,10 @@ impl Core {
                 self.log("late_subtitle", Some(&job), &job.message)?;
             }
         }
+        self.db.put(
+            "last_scan",
+            &json!({"video_count":video_count,"completed_ms":now()}),
+        )?;
         Ok(())
     }
     fn preview(&self, v: &Value) -> Result<Value, String> {

@@ -442,16 +442,25 @@ pub fn write_metadata(job: &Job, p: &Path) -> Result<(), String> {
                 .next()
                 .and_then(Data::bytes)
                 .filter(|b| b.len() >= 6)
-                .map(|b| (u16::from_be_bytes([b[2], b[3]]), u16::from_be_bytes([b[4], b[5]])))
+                .map(|b| {
+                    (
+                        u16::from_be_bytes([b[2], b[3]]),
+                        u16::from_be_bytes([b[4], b[5]]),
+                    )
+                })
                 .unwrap_or((0, 0));
             let n = match values.get(&num_key) {
                 Some(s) if s.is_empty() => 0,
-                Some(s) => s.parse::<u16>().map_err(|_| format!("Invalid {key} number"))?,
+                Some(s) => s
+                    .parse::<u16>()
+                    .map_err(|_| format!("Invalid {key} number"))?,
                 None => existing_n,
             };
             let count = match values.get(&count_key) {
                 Some(s) if s.is_empty() => 0,
-                Some(s) => s.parse::<u16>().map_err(|_| format!("Invalid {key} count"))?,
+                Some(s) => s
+                    .parse::<u16>()
+                    .map_err(|_| format!("Invalid {key} count"))?,
                 None => existing_count,
             };
             data.remove_data_of(&Fourcc(atom));
@@ -638,7 +647,21 @@ impl Core {
             ensure_not_symlink(Path::new(raw))?;
             let path = fs::canonicalize(raw).map_err(|e| e.to_string())?;
             let fp = Fingerprint::read(&path)?;
-            if self.jobs()?.iter().any(|j| j.fingerprint.same_object(&fp)) {
+            if let Some(mut job) = self
+                .jobs()?
+                .into_iter()
+                .find(|j| j.fingerprint.same_object(&fp))
+            {
+                if job.queue_hidden || job.source_missing {
+                    job.queue_hidden = false;
+                    job.source_missing = false;
+                    if job.editable() {
+                        job.current_path = path;
+                    }
+                    job.revision += 1;
+                    job.updated_ms = now();
+                    self.save(&job)?;
+                }
                 return self.snapshot();
             }
             if !video(&path) {

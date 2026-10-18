@@ -257,6 +257,263 @@ fn discovery_deduplicates_events_and_does_not_follow_symlinks() {
     assert_eq!(f.core.jobs().unwrap().len(), 1);
 }
 #[test]
+fn empty_scan_hides_missing_reviews_and_restores_them_when_sources_return() {
+    let mut f = Fixture::new();
+    let job = f.add("Input", true);
+    f.identify(&job, "Reviewed show", 2);
+    let source = f.intake.join("Input.mp4");
+    let parked = f.dir.path().join("parked.mp4");
+    fs::rename(&source, &parked).unwrap();
+    let empty = f.core.command(json!({"command":"discover"})).unwrap();
+    assert_eq!(empty["jobs"], json!([]));
+    assert_eq!(empty["scan"]["video_count"], 0);
+    assert_eq!(f.core.jobs().unwrap().len(), 1, "Keep the saved review");
+    fs::rename(parked, source).unwrap();
+    let restored = f.core.command(json!({"command":"discover"})).unwrap();
+    assert_eq!(restored["scan"]["video_count"], 1);
+    assert_eq!(restored["jobs"][0]["id"], job["id"]);
+    assert_eq!(restored["jobs"][0]["identity"]["title"], "Reviewed show");
+    assert_eq!(
+        restored["jobs"][0]["subtitles"].as_array().unwrap().len(),
+        1
+    );
+}
+#[test]
+fn unavailable_watch_folder_does_not_clear_the_queue_or_record_an_empty_scan() {
+    let mut f = Fixture::new();
+    let job = f.add("Input", false);
+    fs::rename(&f.intake, f.dir.path().join("offline")).unwrap();
+    assert!(f.core.command(json!({"command":"discover"})).is_err());
+    let snapshot = f.core.snapshot().unwrap();
+    assert_eq!(snapshot["jobs"][0]["id"], job["id"]);
+    assert_eq!(snapshot["scan"]["video_count"], 1);
+}
+#[test]
+fn removing_multiple_rows_preserves_files_stays_removed_and_allows_explicit_readding() {
+    let mut f = Fixture::new();
+    let first = f.add("First", true);
+    let second = f.add("Second", false);
+    f.identify(&first, "Saved show", 1);
+    let removed = f
+        .core
+        .command(json!({"command":"remove_jobs","ids":[first["id"],second["id"]]}))
+        .unwrap();
+    assert_eq!(removed["jobs"], json!([]));
+    assert!(f.intake.join("First.mp4").exists());
+    assert!(f.intake.join("First.srt").exists());
+    assert!(f.intake.join("Second.mp4").exists());
+    drop(f.core);
+    f.core = Core::open(&f.dir.path().join("state/jobs.sqlite")).unwrap();
+    let scanned = f.core.command(json!({"command":"discover"})).unwrap();
+    assert_eq!(scanned["jobs"], json!([]));
+    assert_eq!(scanned["scan"]["video_count"], 2);
+    let restored = f
+        .core
+        .command(json!({"command":"direct_add","path":f.intake.join("First.mp4")}))
+        .unwrap();
+    assert_eq!(restored["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(restored["jobs"][0]["id"], first["id"]);
+    assert_eq!(restored["jobs"][0]["identity"]["title"], "Saved show");
+}
+#[test]
+fn removal_rejects_a_mixed_selection_with_approved_work_without_partial_changes() {
+    let mut f = Fixture::new();
+    let active = f.add("Approved", false);
+    f.identify(&active, "Show", 1);
+    f.prepare(&active["id"]);
+    let review = f.add("Review", false);
+    assert!(
+        f.core
+            .command(json!({"command":"remove_jobs","ids":[review["id"],active["id"]]}))
+            .is_err()
+    );
+    assert_eq!(
+        f.core.snapshot().unwrap()["jobs"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        !f.core
+            .job(review["id"].as_str().unwrap())
+            .unwrap()
+            .queue_hidden
+    );
+}
+#[test]
+fn removing_a_review_invalidates_an_existing_batch_preview() {
+    let mut f = Fixture::new();
+    let job = f.add("Input", false);
+    f.identify(&job, "Show", 1);
+    let preview = f
+        .core
+        .command(json!({"command":"preview","ids":[job["id"]]}))
+        .unwrap();
+    assert_eq!(preview["errors"], json!([]));
+    f.core
+        .command(json!({"command":"remove_jobs","ids":[job["id"]]}))
+        .unwrap();
+    assert!(
+        f.core
+            .command(json!({"command":"start_batch","token":preview["token"]}))
+            .is_err()
+    );
+    assert!(f.intake.join("Input.mp4").exists());
+}
+#[test]
+fn clearing_completed_retains_files_journal_and_scan_suppression_across_restart() {
+    let mut f = Fixture::new();
+    let finished = f.add("Finished", true);
+    let review = f.add("Still reviewing", false);
+    let mut job = f.core.job(finished["id"].as_str().unwrap()).unwrap();
+    let output = f.output.join("Published.mp4");
+    fs::write(&output, b"published bytes").unwrap();
+    job.state = "complete".into();
+    job.direct.backend = true;
+    job.direct.trash_source = false;
+    job.output_path = Some(output.clone());
+    job.output_fingerprint = Some(relay_core::model::Fingerprint::read(&output).unwrap());
+    f.core.db.put(&format!("job:{}", job.id), &job).unwrap();
+    let cleared = f
+        .core
+        .command(json!({"command":"clear_completed"}))
+        .unwrap();
+    assert_eq!(cleared["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(cleared["jobs"][0]["id"], review["id"]);
+    let archived = f.core.job(&job.id).unwrap();
+    assert!(archived.queue_hidden);
+    assert!(archived.revision > job.revision);
+    assert_eq!(archived.output_path, Some(output.clone()));
+    f.core
+        .command(json!({"command":"clear_completed"}))
+        .unwrap();
+    assert_eq!(f.core.job(&job.id).unwrap().revision, archived.revision);
+    assert!(f.intake.join("Finished.mp4").exists());
+    assert!(f.intake.join("Finished.srt").exists());
+    assert_eq!(fs::read(&output).unwrap(), b"published bytes");
+    drop(f.core);
+    f.core = Core::open(&f.dir.path().join("state/jobs.sqlite")).unwrap();
+    let snapshot = f.core.command(json!({"command":"discover"})).unwrap();
+    assert_eq!(snapshot["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(snapshot["jobs"][0]["id"], review["id"]);
+    assert_eq!(f.core.jobs().unwrap().len(), 2);
+    assert!(
+        snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"] == "completed_cleared")
+    );
+}
+#[test]
+fn completed_cleanup_and_failed_work_remain_recoverable_when_finished_entries_clear() {
+    let mut f = Fixture::new();
+    let pending = f.add("Cleanup pending", false);
+    let failed = f.add("Subtitle recovery", false);
+    let mut job = f.core.job(pending["id"].as_str().unwrap()).unwrap();
+    job.state = "complete".into();
+    job.direct.backend = true;
+    job.direct.trash_source = true;
+    job.direct.trash_path = None;
+    f.core.db.put(&format!("job:{}", job.id), &job).unwrap();
+    let mut failed_job = f.core.job(failed["id"].as_str().unwrap()).unwrap();
+    failed_job.state = "reconciliation_failed".into();
+    f.core
+        .db
+        .put(&format!("job:{}", failed_job.id), &failed_job)
+        .unwrap();
+    let snapshot = f
+        .core
+        .command(json!({"command":"clear_completed"}))
+        .unwrap();
+    assert_eq!(snapshot["jobs"].as_array().unwrap().len(), 2);
+    assert!(!f.core.job(&job.id).unwrap().queue_hidden);
+    job.direct.trash_path = Some("macOS Trash".into());
+    f.core.db.put(&format!("job:{}", job.id), &job).unwrap();
+    let snapshot = f
+        .core
+        .command(json!({"command":"clear_completed"}))
+        .unwrap();
+    assert_eq!(snapshot["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(snapshot["jobs"][0]["id"], failed["id"]);
+}
+#[test]
+fn clearing_session_archives_every_state_without_touching_files_or_recovery() {
+    let mut f = Fixture::new();
+    let states = [
+        "needs_review",
+        "prepared",
+        "awaiting_output",
+        "direct_queued",
+        "direct_processing",
+        "direct_failed",
+        "direct_interrupted",
+        "output_verified",
+        "reconciliation_failed",
+        "complete",
+    ];
+    let stage = f.output.join(".relay-owned-stage.mp4");
+    fs::write(&stage, b"unfinished media").unwrap();
+    let output = f.output.join("Published.mp4");
+    fs::write(&output, b"published media").unwrap();
+    for state in states {
+        let added = f.add(state, true);
+        let mut job = f.core.job(added["id"].as_str().unwrap()).unwrap();
+        job.state = state.into();
+        job.direct.backend = true;
+        job.direct.trash_source = true; // Includes completed work with pending cleanup.
+        job.direct.temporary = Some(stage.clone());
+        job.direct.temporary_identity = Some(relay_core::model::Fingerprint::read(&stage).unwrap());
+        job.output_path = Some(output.clone());
+        f.core.db.put(&format!("job:{}", job.id), &job).unwrap();
+    }
+    let before = f.core.jobs().unwrap();
+    let cleared = f.core.command(json!({"command":"clear_queue"})).unwrap();
+    assert_eq!(cleared["jobs"], json!([]));
+    for mut expected in before {
+        let archived = f.core.job(&expected.id).unwrap();
+        expected.queue_hidden = true;
+        expected.revision += 1;
+        expected.updated_ms = archived.updated_ms;
+        assert_eq!(json!(archived), json!(expected));
+        assert!(expected.current_path.exists());
+        assert!(expected.subtitles[0].current_path.exists());
+    }
+    assert_eq!(fs::read(&stage).unwrap(), b"unfinished media");
+    assert_eq!(fs::read(&output).unwrap(), b"published media");
+    let archived = json!(f.core.jobs().unwrap());
+    f.core.command(json!({"command":"clear_queue"})).unwrap();
+    assert_eq!(json!(f.core.jobs().unwrap()), archived);
+    drop(f.core);
+    f.core = Core::open(&f.dir.path().join("state/jobs.sqlite")).unwrap();
+    assert_eq!(
+        f.core.command(json!({"command":"discover"})).unwrap()["jobs"],
+        json!([])
+    );
+    assert_eq!(f.core.jobs().unwrap().len(), states.len());
+    let restored = f
+        .core
+        .command(json!({"command":"direct_add","path":f.intake.join("direct_failed.mp4")}))
+        .unwrap();
+    assert_eq!(restored["jobs"][0]["state"], "direct_failed");
+    assert_eq!(restored["jobs"][0]["direct"]["temporary"], json!(stage));
+}
+#[test]
+fn clearing_session_invalidates_batch_approval() {
+    let mut f = Fixture::new();
+    let job = f.add("Input", false);
+    f.identify(&job, "Show", 1);
+    let preview = f
+        .core
+        .command(json!({"command":"preview","ids":[job["id"]]}))
+        .unwrap();
+    assert_eq!(preview["errors"], json!([]));
+    f.core.command(json!({"command":"clear_queue"})).unwrap();
+    assert!(
+        f.core
+            .command(json!({"command":"start_batch","token":preview["token"]}))
+            .is_err()
+    );
+}
+#[test]
 fn parsing_handles_padding_specials_unicode_and_movie_suffix() {
     let tv = parse_identity("Café – s00e010 – Bonus");
     assert_eq!(tv.season, Some(0));
@@ -714,3 +971,23 @@ fn subtitle_edge_cases_and_post_preview_collisions_preserve_safety() {
     assert!(!updated["direct"]["inspection"].is_null());
 }
 
+#[test]
+fn written_episode_clues_preserve_meaningful_quotes_and_never_invent_numbers() {
+    for (name, number, title) in [
+        ("Season 5 Episode 6 - 'Having a Menty B'", 6, "Having a Menty B"),
+        ("Season 5, Ep 2 - 'I'm the Girl One'", 2, "I'm the Girl One"),
+        ("Season 5, Episode 10 - 'Give it to daddy to pop.'", 10, "Give it to daddy to pop."),
+        ("Season 5 Episode 8 - 'Australia's Occasional Sweetheart'.", 8, "Australia's Occasional Sweetheart"),
+        ("SEASON 5, EP. 4 — ‘Writing \"Partners\"’..", 4, "Writing \"Partners\""),
+    ] {
+        let identity = parse_identity(name);
+        assert_eq!(identity.season, Some(5), "{name}");
+        assert_eq!(identity.episode, Some(number), "{name}");
+        assert_eq!(identity.episode_title, title, "{name}");
+        assert!(identity.title.is_empty());
+    }
+    let title = parse_identity("Writing \"Partners\"");
+    assert_eq!(title.episode_title, "Writing \"Partners\"");
+    assert_eq!(title.season, None);
+    assert_eq!(title.episode, None);
+}

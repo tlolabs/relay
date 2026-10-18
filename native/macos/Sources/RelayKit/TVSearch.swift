@@ -4,6 +4,13 @@ public struct TVSeriesCatalog: Codable, Sendable {
     public var title: CatalogTitle
     public var episodes: [EpisodeCandidate]
     public var fetchedAt: Date? = Date()
+    public var status: String? = nil
+    public var inProduction: Bool? = nil
+    public var imdbID: String? = nil
+    public var tvdbID: Int? = nil
+    public var availableSeasons: [Int]? = nil
+    public var seasonFetchedAt: [Int: Date]? = nil
+    public var continuing: Bool { inProduction == true || ["Returning Series", "In Production", "Planned"].contains(status ?? "") }
 }
 public struct TVShowMatch: Identifiable, Sendable {
     public var catalog: TVSeriesCatalog
@@ -48,7 +55,7 @@ public actor EpisodeWebSearch {
         let configuration = URLSessionConfiguration.ephemeral; configuration.urlCache = nil
         self.session = session ?? URLSession(configuration: configuration); self.usage = usage
     }
-    public func showIDs(titles: [String], token: String) async throws -> [Int] {
+    public func showIDs(titles: [String], token: String, activity: @escaping DiscoveryActivityHandler = { _ in }) async throws -> [Int] {
         guard !token.isEmpty else { return [] }
         let clues = EpisodeClues.unique(titles)
         var ids: [Int] = []
@@ -56,6 +63,7 @@ public actor EpisodeWebSearch {
         for start in stride(from: 0, to: clues.count, by: 3) {
             try Task.checkCancellation()
             let group = clues[start..<min(start + 3, clues.count)]
+            await activity(.init(source: "Brave", clues: Array(group), detail: "Searching episode titles"))
             let terms = group.map { "\"\($0.replacingOccurrences(of: "\"", with: " ").prefix(120))\"" }.joined(separator: " OR ")
             var url = URLComponents(string: "https://api.search.brave.com/res/v1/web/search")!
             url.queryItems = [URLQueryItem(name: "q", value: "site:themoviedb.org/tv/ (\(terms))"), URLQueryItem(name: "count", value: "10")]
@@ -81,6 +89,7 @@ public actor EpisodeWebSearch {
                 if !ids.contains(id) { ids.append(id) }
             }
         }
+        await activity(.init(source: "Brave", clues: titles, finished: true))
         return ids
     }
 }

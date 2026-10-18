@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Disposable packaged replacement workflow and native view rendering; no iFlicks access."""
-import json, os, shutil, subprocess, tempfile, time, fcntl, struct, zlib
+import json, os, shutil, subprocess, tempfile, time, fcntl, struct, zlib, sqlite3
 from pathlib import Path
 project=Path(__file__).resolve().parents[1]
 qa=project/'build/qa/direct'
@@ -34,6 +34,9 @@ with tempfile.TemporaryDirectory(prefix='relay-direct-smoke-') as temp:
         time.sleep(.1)
     else: raise AssertionError('Fixture app did not exit')
     with (root/'state/jobs.lock').open('r+') as lock: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    with sqlite3.connect(root/'state/jobs.sqlite') as db:
+        stored_jobs = [json.loads(row[0]) for row in db.execute("SELECT value FROM kv WHERE key LIKE 'job:%'")]
+    assert len(stored_jobs) == 2 and all(job['queue_hidden'] for job in stored_jobs), 'Quit must clear all completed entries while retaining the recovery journal'
     result=json.loads((root/'direct-result.json').read_text())
     for job in result['jobs']:
         assert job['state']=='complete' and job['direct']['backend']
@@ -46,5 +49,5 @@ with tempfile.TemporaryDirectory(prefix='relay-direct-smoke-') as temp:
         # separate Python process from reading the app-created Trash entries.
     for file in root.glob('*.png'): shutil.copy2(file,qa/file.name)
     shutil.copy2(root/'direct-result.json',qa/'direct-result.json')
-    (qa/'summary.json').write_text(json.dumps({'passed':True,'tv_and_movie_complete':True,'source_trash_verified':True,'native_iflicks_access':False,'process_exited':True,'store_lock_released':True},indent=2)+'\n')
+    (qa/'summary.json').write_text(json.dumps({'passed':True,'tv_and_movie_complete':True,'source_trash_verified':True,'native_iflicks_access':False,'process_exited':True,'store_lock_released':True,'completed_cleared_on_quit':True},indent=2)+'\n')
     print((qa/'summary.json').read_text())

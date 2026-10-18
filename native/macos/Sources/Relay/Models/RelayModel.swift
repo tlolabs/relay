@@ -6,6 +6,10 @@ import IFlicksCapture
 
 @MainActor @Observable
 final class RelayModel {
+    @ObservationIgnored let preferences: UserDefaults
+    init(preferences: UserDefaults = .standard, catalog: CatalogClient = CatalogClient(), metadataToken: @escaping () throws -> String = { try CredentialStore.read("tmdb") ?? "" }, plexToken: @escaping () throws -> String = { try CredentialStore.read("plex") ?? "" }) {
+        self.preferences = preferences; self.catalog = catalog; self.metadataToken = metadataToken; self.plexToken = plexToken
+    }
     var snapshot: RelaySnapshot?
     var selectedIds = Set<String>()
     var pendingSelection: Set<String>?
@@ -13,13 +17,27 @@ final class RelayModel {
     var confirmingNavigation = false
     var group = "Queue"
     var busy = false
+    var closing = false
     var workMessage: String?
     var scanning = false
     var folderSearchInProgress = false
     var folderSearchSignature: [String]?
     var folderCatalogs: [TVSeriesCatalog] = []
+    var localExplorations: [String: LocalExploration] = [:]
+    var localFingerprints: [String: String] = [:]
+    var localEmbeddedTags: [String: [String: String]] = [:]
+    var plexInventory: PlexInventory?
+    var catalogRefreshState = CatalogRefreshState()
+    var catalogRefreshBusy = false
+    var catalogRefreshMessage = ""
+    @ObservationIgnored var catalogRefreshTask: Task<Void, Never>?
     var folderEvidence: [Int: [DiscoveryEvidence]] = [:]
     var folderSuggestions: [String: MediaIdentity] = [:]
+    var matchConfidence: [String: MatchConfidence] = [:]
+    var activeSearches: [String: DiscoverySearchActivity] = [:]
+    var searchedJobIDs = Set<String>()
+    var searchJobClues: [String: String] = [:]
+    var searchFileNames: [String: String] = [:]
     var folderSearchSummary = "Scan intake folders to find videos."
     var episodeActivity: String?
     var error: String?
@@ -65,10 +83,18 @@ final class RelayModel {
     var draft = MediaIdentity()
     var draftDirect = DirectDraft()
     var editedMetadataFields = Set<String>()
+    var automaticMetadataFields = Set<String>()
+    var automaticArtwork = false
+    @ObservationIgnored var metadataTask: Task<Void, Never>?
+    var metadataRequest = UUID()
+    var metadataActivity: String?
     var editedIdentityFields = Set<String>()
     var naming = NamingSettings()
     var pendingCatalogChoice: CatalogChoice?
     var artworkCandidates: [String] = []
+    var artworkSelection = UUID()
+    var pendingVideoURLs: [URL] = []
+    @ObservationIgnored var videoImportTask: Task<Void, Never>?
     var loadingCatalogDetails = false
     var inspectingIds = Set<String>()
     var savingDraft = false
@@ -84,7 +110,9 @@ final class RelayModel {
     var databaseURL: URL?
     var smokeMode = false
     var engine: RelayEngine?
-    let catalog = CatalogClient()
+    let catalog: CatalogClient
+    @ObservationIgnored let plexToken: () throws -> String
+    @ObservationIgnored let metadataToken: () throws -> String
     let metadataDiscovery = MetadataDiscoveryClient()
     let imdbIndex = IMDbIndex()
     @ObservationIgnored lazy var discoveryResolver = TMDBDiscoveryResolver(catalog: catalog)
@@ -112,25 +140,58 @@ final class RelayModel {
         else if let workMessage { messages.append(workMessage) }
         if catalogBusy { messages.append(catalogMessage.isEmpty ? "Searching metadata sources…" : catalogMessage) }
         if let episodeActivity { messages.append(episodeActivity) }
+        if let metadataActivity { messages.append(metadataActivity) }
         return messages
     }
     var visibleJobs: [RelayJob] {
         jobs.filter { job in
+            if let filter = QueueFilter(rawValue: group) {
+                return filter.includes(job, suggestion: suggestedIdentity(for: job))
+            }
             switch group {
-            case "Queue": return true
             case "Review": return job.editable
-            case "Active": return !job.editable && job.state != "complete"
-            case "Completed": return job.state == "complete"
             default: return job.editable && listIdentity(for: job).group == group
             }
         }.sorted { FolderReview.precedes(identity: listIdentity(for: $0), filename: $0.filename, id: $0.id,
                                          identity: listIdentity(for: $1), filename: $1.filename, id: $1.id) }
     }
+    var queueFilter: QueueFilter { QueueFilter(rawValue: group) ?? .queue }
+    func jobCount(in filter: QueueFilter) -> Int {
+        jobs.filter { filter.includes($0, suggestion: suggestedIdentity(for: $0)) }.count
+    }
+    func queueStatusLabel(for job: RelayJob) -> String {
+        guard job.editable else { return job.stateLabel }
+        return "\(QueueFilter.identityFilter(for: job, suggestion: suggestedIdentity(for: job)).title) · \(job.stateLabel)"
+    }
     var selectedJob: RelayJob? {
         let visible = visibleJobs
         return visible.first { $0.id == editingId && selectedIds.contains($0.id) } ?? visible.first { selectedIds.contains($0.id) }
     }
-    var reviewIds: [String] { visibleJobs.filter { $0.editable && $0.included && (selectedIds.isEmpty || selectedIds.contains($0.id)) }.map(\.id) }
+    var reviewIds: [String] {
+        let selection = Set(selectedQueueJobs.map(\.id))
+        return visibleJobs.filter { $0.editable && $0.included && (selection.isEmpty || selection.contains($0.id)) }.map(\.id)
+    }
+    var selectedQueueJobs: [RelayJob] { visibleJobs.filter { selectedIds.contains($0.id) } }
+    var canRemoveSelectedJobs: Bool {
+        !busy && !savingDraft && !selectedQueueJobs.isEmpty && selectedQueueJobs.allSatisfy(\.removable)
+    }
+    var queueEmptyTitle: String {
+        if scanning { return "Scanning folders…" }
+        if group == "Active" { return "No videos processing" }
+        if group == "Completed" { return "No completed videos" }
+        if group == "Unidentified" { return "No unidentified videos" }
+        if group == "Suggested" { return "No suggested matches" }
+        if group == "Matched" { return "No matched videos" }
+        if group != "Queue", !jobs.isEmpty { return "No videos to review" }
+        return snapshot?.scan?.videoCount == 0 ? "No videos found" : "Your queue is empty"
+    }
+    var queueEmptyDescription: String {
+        if scanning { return "Checking watched folders for videos." }
+        if group != "Queue" { return "\(queueFilter.description) Choose Queue to see unfinished videos." }
+        if jobCount(in: .processing) > 0 { return "Approved videos are in Processing. Scan watched folders or use + to add videos." }
+        if jobCount(in: .completed) > 0 { return "Finished videos are in Completed until RELAY quits. Scan watched folders or use + to add videos." }
+        return "Drop videos here, scan your watched folders or use + to add videos."
+    }
     var hasUnsavedChanges: Bool { guard let job = selectedJob, job.id == editingId, job.editable else { return false }; return !editedMetadataFields.isEmpty || !editedIdentityFields.isEmpty || draft != job.identity || draftDirect != job.options || draftSubtitles.map { "\($0.id):\($0.selected):\($0.language)" } != job.subtitles.map { "\($0.id):\($0.selected):\($0.language)" } }
     var attentionCount: Int { jobs.filter { $0.needsAttention || $0.editable && $0.included }.count }
 
@@ -171,16 +232,19 @@ final class RelayModel {
         return fm.fileExists(atPath: movies) ? movies : home.path
     }
     func initialize(smokeRoot: URL? = nil) async {
-        guard engine == nil else { return }
+        guard engine == nil, !closing else { return }
         busy = true; workMessage = "Opening the job library…"
-        defer { busy = false; workMessage = nil }
+        defer { busy = false; workMessage = nil; startPendingVideoImports() }
         smokeMode = smokeRoot != nil
         do {
             let root = smokeRoot?.appendingPathComponent("state") ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("RELAY", isDirectory: true)
             databaseURL = root.appendingPathComponent("jobs.sqlite")
             let engine = try RelayEngine(database: databaseURL!)
             self.engine = engine
-            snapshot = try await engine.snapshot()
+            restoreLocalContext()
+            // Queue entries belong to the previous app session, including
+            // sessions ended by a crash or force quit.
+            try await clearQueueEntries()
             do {
                 if snapshot?.config == nil {
                     let defaults = UserDefaults.standard
@@ -191,6 +255,7 @@ final class RelayModel {
                 try await refresh(discover: true)
             } catch { self.error = error.localizedDescription }
             await loadNaming()
+            scheduleCatalogRefreshIfDue()
             if !smokeMode, jobs.contains(where: { $0.iflicksId != nil && $0.state != "complete" }) { await startSampler() }
             pollTask = Task { [weak self] in
                 var tick = 0
@@ -198,18 +263,24 @@ final class RelayModel {
                     try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled, let self else { return }
                     tick += 1
+                    if tick % 120 == 0 { self.scheduleCatalogRefreshIfDue() }
                     if !self.busy { do { try await self.refresh(discover: tick % 10 == 0 && (UserDefaults.standard.object(forKey: "watchFoldersEnabled") as? Bool ?? true)) } catch { self.error = error.localizedDescription } }
                 }
             }
         } catch { self.error = error.localizedDescription }
     }
     func refresh(discover: Bool = false) async throws {
+        guard !closing else { return }
         guard let engine else { throw RelayFailure.message("The job store is unavailable") }
         if discover { scanning = true }
         defer { if discover { scanning = false } }
         let hadEdits = hasUnsavedChanges, priorState = selectedJob?.state
-        let result: RelaySnapshot = try await engine.execute(["command": discover ? "discover" : "snapshot"])
+        var result: RelaySnapshot = try await engine.execute(["command": discover ? "discover" : "snapshot"])
+        if completedRetention == .removeImmediately, result.jobs.contains(where: { $0.state == "complete" && !$0.needsAttention }) {
+            result = try await engine.execute(["command": "clear_completed"])
+        }
         snapshot = result
+        if discover { await prepareLocalEvidence() }
         let attention = Set(result.jobs.filter { $0.needsAttention || $0.editable && $0.included }.map { "\($0.id):\($0.state)" })
         let added = attention.subtracting(previousAttention)
         if !smokeMode {
@@ -217,7 +288,7 @@ final class RelayModel {
             if hasLoadedAttention && !added.isEmpty { AttentionService.deliver(count: added.count) }
         }
         previousAttention = attention; hasLoadedAttention = true
-        selectedIds.formIntersection(Set(result.jobs.map(\.id)))
+        selectedIds.formIntersection(Set(visibleJobs.map(\.id)))
         if !hadEdits, !savingDraft, priorState != selectedJob?.state { loadDraft() }
         if discover { beginFolderSearchIfNeeded() }
         if !smokeMode, let job = selectedJob, job.editable, job.options.inspection == nil, !hasUnsavedChanges { Task { await self.inspectSelected() } }
@@ -227,12 +298,27 @@ final class RelayModel {
         folderSearchSignature = nil
         await perform("Scanning intake folders…") { try await self.refresh(discover: true) }
     }
+    func removeSelectedJobs() async {
+        guard canRemoveSelectedJobs, let engine else { return }
+        let ids = selectedQueueJobs.map(\.id)
+        autosaveTask?.cancel()
+        await perform("Removing selected videos from the queue…") {
+            await self.persistDraft()
+            guard !self.hasUnsavedChanges else { return }
+            self.snapshot = try await engine.execute(["command": "remove_jobs", "ids": ids])
+            self.selectedIds.subtract(ids)
+            self.folderSuggestions = self.folderSuggestions.filter { !ids.contains($0.key) }
+            self.loadDraft()
+        }
+    }
     func perform(_ message: String = "Updating jobs…", _ work: () async throws -> Void) async {
-        guard !busy else { return }; busy = true; workMessage = message; error = nil
+        guard !busy, !closing else { return }; busy = true; workMessage = message; error = nil
         defer { busy = false; workMessage = nil }
         do { try await work() } catch { self.error = error.localizedDescription; try? await refresh() }
     }
     func loadDraft() {
+        metadataTask?.cancel(); metadataRequest = UUID(); metadataActivity = nil; artworkSelection = UUID()
+        automaticMetadataFields = []; automaticArtwork = false
         editedMetadataFields = []
         editedIdentityFields = []
         if !folderSearchInProgress { cancelCatalogSearch() }
@@ -248,6 +334,7 @@ final class RelayModel {
             showMatches = MetadataConsensus.rank(folderCatalogs, clues: episodeSearchClues, evidence: folderEvidence).filter { !$0.supportedTitles.isEmpty }
             catalogMessage = folderSearchSummary
         }
+        startMetadataLoad()
     }
     func saveDraft() async {
         if !smokeMode { await persistDraft(); return }
@@ -348,7 +435,23 @@ final class RelayModel {
     }
     private func setStatus(_ status: IFlicksCaptureStatus) { iflicksStatus = status }
     func pauseSampler() async { lifecycle?.stop(); lifecycle = nil; await sampler?.stop(); sampler = nil }
-    func close() async { autosaveTask?.cancel(); await persistDraft(); cancelProcessing(); if let processingTask { await processingTask.value }; imdbImportTask?.cancel(); if let task = imdbImportTask { await task.value }; catalogTask?.cancel(); catalogRequest = UUID(); pollTask?.cancel(); pollTask = nil; await pauseSampler(); await engine?.close(); engine = nil }
+    func close() async {
+        guard !closing else { return }
+        closing = true
+        pollTask?.cancel(); if let pollTask { await pollTask.value }; pollTask = nil
+        cancelCatalogSearch()
+        catalogRefreshTask?.cancel(); if let task = catalogRefreshTask { await task.value }
+        metadataTask?.cancel(); metadataRequest = UUID()
+        videoImportTask?.cancel(); if let task = videoImportTask { await task.value }
+        pendingVideoURLs = []
+        autosaveTask?.cancel(); await persistDraft()
+        cancelProcessing(); if let processingTask { await processingTask.value }
+        imdbImportTask?.cancel(); if let task = imdbImportTask { await task.value }
+        await pauseSampler()
+        do { try await clearQueueEntries() }
+        catch { self.error = "Could not clear the queue: \(error.localizedDescription)" }
+        await engine?.close(); engine = nil
+    }
     func runningIFlicks() async throws -> IFlicksProcess {
         if IFlicksProcess.running() == nil {
             let url = URL(fileURLWithPath: "/Applications/iFlicks 3.app")

@@ -60,6 +60,13 @@ struct CatalogSearchView: View {
                                             .help(match.matchedTitles.joined(separator: "\n"))
                                     }
                                 }
+                                if let job = model.selectedJob {
+                                    if let local = model.localContext(for: job) {
+                                        ConfidenceLabel(confidence: MatchConfidence.local(local, catalogs: model.showMatches.map(\.catalog), inventory: model.plexInventory, providerEvidence: model.catalogEvidence, evaluatingShowID: match.id))
+                                    } else {
+                                        ConfidenceLabel(confidence: MatchConfidence.tv(clue: model.searchClue(for: job), catalogs: model.showMatches.map(\.catalog), evidence: model.catalogEvidence, incomplete: model.searchHasIncompleteChecks, showID: match.id))
+                                    }
+                                }
                                 DiscoveryEvidenceView(match: match)
                                 }
                             }
@@ -68,6 +75,9 @@ struct CatalogSearchView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack { CatalogArtworkView(model:model,url:title.posterURL).frame(width:38,height:52); Button(label(title)) { model.chooseCatalogTitle(title) }.buttonStyle(.link) }
                                 if let evidence = model.catalogEvidence[title.id] { MovieDiscoveryEvidenceView(title: title, evidence: evidence) }
+                                if model.catalogKind == "movie" {
+                                    ConfidenceLabel(confidence: MatchConfidence.movie(title: title, query: model.searchText, candidates: model.catalogTitles, evidence: model.catalogEvidence[title.id, default: []], incomplete: model.searchHasIncompleteChecks))
+                                }
                             }
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)

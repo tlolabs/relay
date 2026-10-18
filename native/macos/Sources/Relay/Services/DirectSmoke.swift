@@ -6,6 +6,9 @@ extension RelayModel {
     func runDirectSmoke(root: URL) async {
         let priorTab = UserDefaults.standard.object(forKey: "inspectorTab")
         let priorGrid = UserDefaults.standard.object(forKey: "queueGrid")
+        let priorRetention = UserDefaults.standard.object(forKey: "completedRetention")
+        UserDefaults.standard.set(CompletedRetention.untilQuit.rawValue, forKey: "completedRetention")
+        defer { if let priorRetention { UserDefaults.standard.set(priorRetention, forKey: "completedRetention") } else { UserDefaults.standard.removeObject(forKey: "completedRetention") } }
         defer { if let priorTab { UserDefaults.standard.set(priorTab, forKey: "inspectorTab") } else { UserDefaults.standard.removeObject(forKey: "inspectorTab") }; if let priorGrid { UserDefaults.standard.set(priorGrid, forKey:"queueGrid") } else { UserDefaults.standard.removeObject(forKey:"queueGrid") } }
         do {
             guard let engine else { throw RelayFailure.message(error ?? "No fixture store") }
@@ -28,6 +31,14 @@ extension RelayModel {
                 await persistDraft()
             }
             try await refresh()
+            // Exercise the search presentation with deterministic local evidence;
+            // the packaged smoke test never calls live metadata providers.
+            if let tv = jobs.first(where: { $0.identity.kind == "tv" }) {
+                let data = Data(#"{"title":{"id":123,"name":"RELAY TV Fixture"},"episodes":[{"id":1,"name":"A reviewed episode","seasonNumber":1,"episodeNumber":1}]}"#.utf8)
+                let value = try JSONDecoder().decode(TVSeriesCatalog.self, from: data)
+                let evidence = [DiscoveryEvidence(source: .trakt, recordID: "fixture", title: "RELAY TV Fixture", episode: DiscoveredEpisode(title: "A reviewed episode", season: 1, number: 1)), DiscoveryEvidence(source: .tvmaze, recordID: "fixture", title: "RELAY TV Fixture", episode: DiscoveredEpisode(title: "A reviewed episode", season: 1, number: 1))]
+                matchConfidence[tv.id] = MatchConfidence.tv(clue: "A reviewed episode", catalogs: [value], evidence: [123: evidence])
+            }
             selectedIds = [ids[0]];loadDraft()
             UserDefaults.standard.set(false,forKey:"queueGrid")
             for appearance in ["dark","light"] {
@@ -56,6 +67,14 @@ extension RelayModel {
                 try await Task.sleep(for:.milliseconds(200))
                 try captureDirectView(root.appendingPathComponent("\(appearance)-Grid.png"))
                 UserDefaults.standard.set(false,forKey:"queueGrid")
+                searchJobClues = Dictionary(uniqueKeysWithValues: jobs.map { ($0.id, EpisodeClues.normalized(searchClue(for: $0))) })
+                searchFileNames = Dictionary(uniqueKeysWithValues: jobs.map { ($0.id, $0.filename) })
+                catalogBusy = true; folderSearchInProgress = true
+                catalogMessage = "Comparing episode titles with Trakt and TMDB…"
+                updateSearchActivity(.init(source: "Trakt", clues: jobs.map { searchClue(for: $0) }), request: catalogRequest)
+                try await Task.sleep(for: .milliseconds(200))
+                try captureDirectView(root.appendingPathComponent("\(appearance)-SearchActivity.png"))
+                cancelCatalogSearch()
                 settingsTab="general"
                 let settings=NSWindow(contentRect:NSRect(x:100,y:100,width:820,height:680),styleMask:[.titled,.closable],backing:.buffered,defer:false)
                 settings.title="RELAY Settings Fixture";settings.isReleasedWhenClosed=false
@@ -73,6 +92,10 @@ extension RelayModel {
             await approveDirect()
             if let task=processingTask { await task.value }
             guard jobs.allSatisfy({ $0.state == "complete" && $0.options.trashPath != nil }), jobs.allSatisfy({ $0.iflicksId == nil }) else { throw RelayFailure.message(error ?? jobs.map(\.message).joined(separator:"\n")) }
+            guard jobCount(in: .queue) == 0, jobCount(in: .processing) == 0, jobCount(in: .completed) == 2 else { throw RelayFailure.message("Completed jobs did not leave Queue and Processing") }
+            group = "Completed"; selectedIds = []; loadDraft()
+            try await Task.sleep(for: .milliseconds(200))
+            try captureDirectView(root.appendingPathComponent("Completed.png"))
             try JSONEncoder().encode(snapshot).write(to:root.appendingPathComponent("direct-result.json"))
         } catch { try? Data(error.localizedDescription.utf8).write(to:root.appendingPathComponent("error.txt")) }
         NSApp.terminate(nil)

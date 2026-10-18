@@ -12,10 +12,11 @@ public actor TMDBDiscoveryResolver {
     private struct Key: Hashable { var kind: String; var ids: DiscoveryIDs; var name: String; var year: Int? }
     private var resolved: [Key: (Date, [CatalogTitle])] = [:]
     public init(catalog: CatalogClient) { self.catalog = catalog }
-    public func resolve(_ evidence: [DiscoveryEvidence], token: String) async throws -> ResolvedDiscovery {
+    public func resolve(_ evidence: [DiscoveryEvidence], token: String, activity: @escaping DiscoveryActivityHandler = { _ in }) async throws -> ResolvedDiscovery {
         var result = ResolvedDiscovery(), seen = Set<Int>()
         for record in Set(evidence) {
             try Task.checkCancellation()
+            await activity(.init(source: "TMDB", clues: [record.matchedClue ?? record.episode?.title ?? record.title], detail: "Verifying \(record.title)"))
             let key = Key(kind: record.kind, ids: record.ids, name: EpisodeClues.normalized(record.title), year: record.year)
             let candidates: [CatalogTitle]
             do {
@@ -37,6 +38,7 @@ public actor TMDBDiscoveryResolver {
                 result.unresolved.append("\(record.source.rawValue): “\(record.title)” could not be verified in TMDB. \((error as? RelayFailure)?.localizedDescription ?? "Try again later.")")
             }
         }
+        await activity(.init(source: "TMDB", clues: [], finished: true))
         result.unresolved = Array(Set(result.unresolved)).sorted()
         return result
     }

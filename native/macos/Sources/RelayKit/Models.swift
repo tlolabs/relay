@@ -50,6 +50,7 @@ public struct RelayJob: Codable, Identifiable, Sendable {
     public var processIdentity: String?; public var progress: Int?; public var iflicksStatus: String?
     public var outputPath: String?; public var outputFingerprint: FileFingerprint?; public var outputAttestedMs: UInt64?
     public var editable: Bool { ["needs_review", "excluded", "source_changed"].contains(state) }
+    public var removable: Bool { editable || state == "complete" && !(options.backend && options.trashSource && options.trashPath == nil) }
     public var filename: String { URL(fileURLWithPath: currentPath).lastPathComponent }
     public var stateLabel: String { state.replacingOccurrences(of: "_", with: " ").capitalized }
     public var needsAttention: Bool { if options.backend && options.trashSource && state == "complete" && options.trashPath == nil { return true }; return ["direct_failed", "direct_interrupted", "source_changed", "recovery_needed", "submission_uncertain", "processing_failed", "awaiting_output", "output_verified", "reconciliation_failed"].contains(state) }
@@ -65,6 +66,11 @@ public struct RelayEvent: Codable, Identifiable, Sendable {
 public struct RelaySnapshot: Codable, Sendable {
     public var version: String; public var jobs: [RelayJob]; public var events: [RelayEvent]
     public var recentIdentities: [MediaIdentity]; public var config: RelayConfig?
+    public var scan: FolderScan?
+}
+public struct FolderScan: Codable, Sendable {
+    public var videoCount: Int
+    public var completedMs: UInt64
 }
 public struct BatchPreview: Codable, Sendable {
     public struct Action: Codable, Identifiable, Sendable {

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import RelayKit
+import UniformTypeIdentifiers
 
 struct InspectorView: View {
     @Bindable var model: RelayModel
@@ -8,6 +9,7 @@ struct InspectorView: View {
     @AppStorage("inspectorTab") private var tab = "Metadata"
     @State private var search: String?
     @State private var showArtwork = false
+    @State private var artworkDropTargeted = false
     var body: some View {
         VStack(spacing: 0) {
             Picker("Inspector",selection: $tab) {
@@ -45,6 +47,18 @@ struct InspectorView: View {
     }
     private var metadata: some View {
         VStack(alignment: .leading,spacing: 20) {
+            if let confidence = model.confidence(for: job) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ConfidenceLabel(confidence: confidence)
+                    DisclosureGroup("Why this score?") {
+                        ForEach(confidence.dimensions.keys.sorted(), id: \.self) { key in
+                            Text("\(key): \(confidence.dimensions[key] ?? 0)/100").font(.caption)
+                        }
+                        Text(confidence.canonicalAgreement ? "Canonical catalog agreement · still needs review" : "Provisional contextual candidate").font(.caption)
+                        Text(confidence.explanation).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }.font(.caption)
+                }
+            }
             section("General") {
                 identityRow("Name",key: model.draft.kind == "movie" ? \.title : \.episodeTitle, searchKind: "name")
                 identityRow("Show",key: \.title, searchKind: "show", disabled: model.draft.kind == "movie")
@@ -66,7 +80,14 @@ struct InspectorView: View {
                             Button("Choose File…") { model.chooseLocalPoster() }
                         }
                         Text(model.draft.kind == "tv" ? "For identification only · No artwork will be embedded in TV outputs." : "Selected poster will be embedded in the finished movie.").font(.caption).foregroundStyle(.secondary)
+                        Text("Drop an image here to use as artwork.").font(.caption).foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .contentShape(Rectangle())
+                    .background(artworkDropTargeted ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay { if artworkDropTargeted { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 2).allowsHitTesting(false) } }
+                    .onDrop(of: [UTType.fileURL, UTType.image], isTargeted: $artworkDropTargeted) { model.acceptArtworkDrop($0) }
                 }
                 fieldRow(MetadataField("comment", "Comment", multiline: true))
             }

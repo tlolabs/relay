@@ -17,9 +17,7 @@ extension RelayModel {
         jobs.filter { $0.editable && $0.identity.kind != "movie" }
     }
     var episodeSearchClues: [String] {
-        EpisodeClues.unique(episodeSearchJobs.map {
-            $0.identity.episodeTitle.isEmpty ? URL(fileURLWithPath: $0.originalPath).deletingPathExtension().lastPathComponent : $0.identity.episodeTitle
-        })
+        EpisodeClues.unique(episodeSearchJobs.map { searchClue(for: $0) })
     }
     func savedCatalogs() -> [TVSeriesCatalog] {
         guard let folder = cacheFolder, let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return [] }
@@ -35,7 +33,7 @@ extension RelayModel {
     }
     func cancelCatalogSearch() {
         if folderSearchInProgress { folderSearchSummary = "Folder search stopped. Use Scan to search all videos again." }
-        catalogTask?.cancel(); catalogRequest = UUID(); catalogBusy = false; folderSearchInProgress = false
+        catalogTask?.cancel(); catalogRequest = UUID(); catalogBusy = false; folderSearchInProgress = false; activeSearches = [:]
     }
     func beginFolderSearchIfNeeded() {
         guard !smokeMode, !catalogBusy, !folderSearchInProgress else { return }
@@ -43,7 +41,7 @@ extension RelayModel {
         guard signature != folderSearchSignature else { return }
         folderSearchSignature = signature
         rebuildFolderSuggestions()
-        folderSearchSummary = "Found \(jobs.filter(\.editable).count) videos. Confirm identities, save each review, then review the batch."
+        folderSearchSummary = "Found \(jobs.filter(\.editable).count) videos. Confirm identities, then press Review… to check the batch."
         guard !signature.isEmpty else { return }
         folderSearchSummary = "Found \(jobs.filter(\.editable).count) videos. Searching the folder's episode titles…"
         beginCatalogSearch(filenamesOnly: true)
@@ -54,11 +52,18 @@ extension RelayModel {
         episodes = folderCatalogs.first { UInt64($0.title.id) == identity.tmdbId }?.episodes ?? []
         suggestions = []
         scheduleAutosave()
+        startMetadataLoad()
     }
     func rebuildFolderSuggestions() {
         folderSuggestions = Dictionary(uniqueKeysWithValues: episodeSearchJobs.compactMap { job in
-            guard job.identity.title.isEmpty,
-                  let identity = FolderReview.suggestion(for: job.identity.episodeTitle, catalogs: folderCatalogs, evidence: folderEvidence) else { return nil }
+            guard job.identity.title.isEmpty else { return nil }
+            // Saved queue rows can be shown before their sources are explored.
+            guard let local = localContext(for: job) else {
+                return FolderReview.suggestion(for: job.identity.episodeTitle, catalogs: folderCatalogs, evidence: folderEvidence).map { (job.id, $0) }
+            }
+            guard !local.conflicts else { return nil }
+            let score = MatchConfidence.local(local, catalogs: folderCatalogs, inventory: plexInventory, providerEvidence: folderEvidence)
+            guard let identity = score.identity, !identity.title.isEmpty else { return nil }
             return (job.id, identity)
         })
     }
@@ -158,13 +163,15 @@ extension RelayModel {
         season = episode.seasonNumber
         draft.kind = "tv"; draft.season = episode.seasonNumber; draft.episode = episode.episodeNumber; draft.episodeTitle = episode.name
         scheduleAutosave()
-        if !smokeMode { Task { await self.loadEpisodeMetadata() } }
+        startMetadataLoad()
     }
     func applyShowToSelection() async {
         autosaveTask?.cancel()
         guard let engine, draft.kind == "tv", !draft.title.isEmpty else { return }
+        metadataTask?.cancel(); metadataRequest = UUID(); metadataActivity = nil; artworkSelection = UUID()
         let selected = jobs.filter { $0.editable && selectedIds.contains($0.id) }
         let show = draft
+        let options = draftDirect, editor = editingId, manualFields = editedMetadataFields
         await perform("Applying the selected show to review rows…") {
             for job in selected {
                 var identity = job.identity
@@ -178,8 +185,14 @@ extension RelayModel {
                         identity.season = best.seasonNumber; identity.episode = best.episodeNumber; identity.episodeTitle = best.name
                     }
                 }
-                let _: RelaySnapshot = try await engine.execute(["command": "edit", "id": job.id, "revision": job.revision, "identity": RelayEngine.object(identity)])
+                var direct = job.id == editor ? options : job.options
+                if job.id != editor {
+                    for key in manualFields { direct.metadata[key] = options.metadata[key] ?? ""; direct.overrides.insert(key) }
+                }
+                let _: RelaySnapshot = try await engine.execute(["command": "edit", "id": job.id, "revision": job.revision, "identity": RelayEngine.object(identity), "direct": RelayEngine.object(direct)])
             }
+            try await self.refresh()
+            if !self.smokeMode { try await self.completeCatalogMetadata(ids: selected.map(\.id)) }
             try await self.refresh(); self.loadDraft()
             self.notice = "Show applied to the selected review rows. Exact episode-title suggestions were filled; verify every included row before approval."
         }
