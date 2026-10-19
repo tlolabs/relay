@@ -88,7 +88,7 @@ struct SettingsView: View {
                 }
             }.formStyle(.grouped).tabItem { Label("Attention", systemImage: "bell") }.tag("attention")
             VStack(alignment: .leading, spacing: 18) {
-                Text("RELAY 0.1.0").font(.title.weight(.semibold))
+                Text("RELAY 0.2.3").font(.title.weight(.semibold))
                 Text("Your reviewed downloads, prepared and tracked through iFlicks.").foregroundStyle(.secondary)
                 Divider()
                 if let url = Bundle.main.url(forResource: "TMDB", withExtension: "svg"), let image = NSImage(contentsOf: url) {

@@ -3,7 +3,7 @@ import SwiftUI
 import RelayKit
 
 extension RelayModel {
-    func runDirectSmoke(root: URL) async {
+    func runDirectSmoke(root: URL, delegate: RelayDelegate) async {
         let priorTab = UserDefaults.standard.object(forKey: "inspectorTab")
         let priorGrid = UserDefaults.standard.object(forKey: "queueGrid")
         let priorRetention = UserDefaults.standard.object(forKey: "completedRetention")
@@ -13,6 +13,7 @@ extension RelayModel {
         do {
             guard let engine else { throw RelayFailure.message(error ?? "No fixture store") }
             guard jobs.count == 2 else { throw RelayFailure.message("Two disposable video fixtures are required") }
+            try await verifyMainWindowSmoke(delegate: delegate, root: root)
             for job in jobs {
                 let info = try await processor.inspect(path:job.currentPath,tools:mediaTools())
                 let _: RelayJob = try await engine.execute(["command":"direct_inspect","id":job.id,"revision":job.revision,"inspection":RelayEngine.object(info)])

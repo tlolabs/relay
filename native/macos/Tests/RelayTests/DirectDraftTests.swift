@@ -91,4 +91,21 @@ import RelayKit
         XCTAssertEqual(RelayModel.defaultIntakeRoots(home: home, defaults: defaults), [downloads.path])
         XCTAssertEqual(RelayModel.defaultOutputFolder(home: home, defaults: defaults), movies.path)
     }
+
+    func testPosterCacheCapacityAndEviction() {
+        let model = RelayModel()
+        for i in 0..<60 {
+            model.cachePoster(Data("data-\(i)".utf8), for: "https://example.com/poster-\(i).jpg")
+        }
+        XCTAssertEqual(model.cachedPosterCount, 50)
+        XCTAssertNil(model.cachedPoster(for: "https://example.com/poster-0.jpg"))
+        XCTAssertNil(model.cachedPoster(for: "https://example.com/poster-9.jpg"))
+        XCTAssertNotNil(model.cachedPoster(for: "https://example.com/poster-10.jpg"))
+        XCTAssertNotNil(model.cachedPoster(for: "https://example.com/poster-59.jpg"))
+
+        model.clearPosterCache()
+        XCTAssertEqual(model.cachedPosterCount, 0)
+        XCTAssertEqual(model.cachedPosterBytes, 0)
+    }
+
 }

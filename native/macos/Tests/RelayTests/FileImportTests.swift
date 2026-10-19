@@ -169,4 +169,42 @@ import RelayKit
         }
         await engine.close()
     }
+
+    func testRelayDelegateBuffersPendingURLsBeforeModelAttachment() async throws {
+        let (root, model, engine) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.engine = engine
+        let delegate = RelayDelegate()
+        let file = try video("Drop.mp4", in: root)
+        delegate.application(NSApp, open: [file])
+        XCTAssertEqual(model.pendingVideoURLs, [])
+        delegate.model = model
+        XCTAssertEqual(model.pendingVideoURLs, [file])
+        await engine.close()
+    }
+
+    func testColdAndWarmDelegateAndSceneImportsRemainDeduplicatedReviewEntries() async throws {
+        _ = NSApplication.shared
+        let (root, model, engine) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try video("First.mp4", in: root), second = try video("Second.mp4", in: root)
+        let delegate = RelayDelegate()
+        var opens = 0
+        delegate.openMainWindow = { opens += 1 }
+        delegate.application(NSApp, open: [first, second])
+        delegate.model = model
+        XCTAssertEqual(model.pendingVideoURLs.count, 2)
+        model.engine = engine
+        model.startPendingVideoImports()
+        await model.videoImportTask?.value
+        delegate.mainWindowAttached()
+        delegate.application(NSApp, openFiles: [first.path, second.path])
+        model.enqueueVideos([first]) // The SwiftUI delivery path may also see the same event.
+        await model.videoImportTask?.value
+        XCTAssertEqual(model.jobs.count, 2)
+        XCTAssertTrue(model.jobs.allSatisfy { $0.state == "needs_review" && $0.approvedRevision == nil })
+        XCTAssertNil(model.processingTask)
+        XCTAssertEqual(opens, 2)
+        await engine.close()
+    }
 }

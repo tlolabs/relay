@@ -18,7 +18,7 @@ struct JobDetailView: View {
                             Text(job.stateLabel).foregroundStyle(job.needsAttention ? .orange : .secondary)
                         }
                         Spacer()
-                        Button { model.reveal(job.outputPath ?? job.currentPath) } label: { Image(systemName: "folder") }.help("Reveal file")
+                        Button { model.reveal(job.outputPath ?? job.currentPath) } label: { Image(systemName: "folder") }.help("Reveal file").accessibilityLabel("Reveal file in Finder")
                     }
                     if !job.message.isEmpty { Text(job.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
                     if job.editable {

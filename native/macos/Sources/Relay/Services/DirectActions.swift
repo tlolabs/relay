@@ -79,9 +79,18 @@ extension RelayModel {
             do { try await Task.sleep(for: .milliseconds(400)); try Task.checkCancellation(); await self?.persistDraft() } catch {}
         }
     }
-    func persistDraft() async {
-        guard !savingDraft, let job = selectedJob, job.editable, job.id == editingId, let engine, hasUnsavedChanges else { return }
-        savingDraft = true; defer { savingDraft = false }
+    @discardableResult func persistDraft() async -> Bool {
+        // Selection changes and explicit saves must wait for the current write,
+        // rather than switching editors while its snapshot is still in flight.
+        while savingDraft { await withCheckedContinuation { draftSaveWaiters.append($0) } }
+        guard hasUnsavedChanges else { return true }
+        guard let job = selectedJob, job.editable, job.id == editingId, let engine else { return false }
+        savingDraft = true
+        defer {
+            savingDraft = false
+            let waiters = draftSaveWaiters; draftSaveWaiters = []
+            for waiter in waiters { waiter.resume() }
+        }
         let identity = draft, direct = draftDirect, subtitles = draftSubtitles, revision = draftRevision
         let selected = jobs.filter { $0.editable && selectedIds.contains($0.id) }
         let before = RelayEngine.object(job.identity) as? [String:Any] ?? [:]
@@ -121,7 +130,8 @@ extension RelayModel {
             try await refresh()
             if editingId == job.id, let saved = jobs.first(where: { $0.id == job.id }) { draftRevision = saved.revision; if draftDirect.artworkPath == direct.artworkPath { draftDirect.artworkFingerprint = saved.options.artworkFingerprint } }
             if draft != identity || draftDirect != direct || draftSubtitles != subtitles { scheduleAutosave() }
-        } catch { self.error = "Draft was not saved: \(error.localizedDescription)" }
+            return true
+        } catch { self.error = "Draft was not saved: \(error.localizedDescription)"; return false }
     }
     func directPreview() async {
         preview = nil; presentingPreview = false
@@ -210,6 +220,7 @@ extension RelayModel {
         do { try JSONEncoder().encode(snapshot.events).write(to: url, options: .atomic) } catch { self.error = error.localizedDescription }
     }
     func clearPublicCache() {
+        clearPosterCache()
         guard let folder = cacheFolder, let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
         do { for url in files where url.pathExtension == "json" { try FileManager.default.removeItem(at: url) }; notice = "Public JSON metadata cache cleared. Jobs, credentials and IMDb index retained." } catch { self.error = error.localizedDescription }
     }

@@ -17,7 +17,7 @@ struct InspectorView: View {
                 Label("Metadata",systemImage: "tag").tag("Metadata")
                 Label("Chapters",systemImage: "list.bullet.rectangle").tag("Chapters")
                 Label("Tracks",systemImage: "film").tag("Tracks")
-            }.pickerStyle(.segmented).labelsHidden().padding(12)
+            }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Inspector section").padding(12)
             Divider()
             if model.selectedIds.count > 1 { Text("\(model.selectedIds.count) selected · Only fields you change apply to all selected editable videos.").font(.caption).foregroundStyle(.secondary).padding(8) }
             ScrollView {
@@ -41,7 +41,7 @@ struct InspectorView: View {
                 Text("Identity: title, type, year and catalog ID. TV episode numbering will be cleared if the show changes.").font(.callout)
                 if model.loadingCatalogDetails { ProgressView("Loading metadata preview…") }
                 if let values = choice.metadata { ScrollView { VStack(alignment: .leading) { ForEach(values.fields.keys.sorted(),id: \.self) { key in if !model.draftDirect.overrides.contains(key) { Text("\(key): \(values.fields[key] ?? "")").font(.caption).lineLimit(3) } } } }.frame(maxHeight:220) }
-                HStack { Spacer(); Button("Cancel") { model.pendingCatalogChoice = nil }; Button("Apply Match") { model.applyPendingCatalog() }.buttonStyle(.borderedProminent).disabled(model.loadingCatalogDetails) }
+                HStack { Spacer(); Button("Cancel") { model.pendingCatalogChoice = nil }.keyboardShortcut(.cancelAction); Button("Apply Match") { model.applyPendingCatalog() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(model.loadingCatalogDetails) }
             }.padding(24).frame(width: 520)
         }
     }
@@ -102,7 +102,7 @@ struct InspectorView: View {
         row(title) {
             HStack {
                 TextField(title,text: Binding(get: { disabled || identityMixed(key) ? "" : model.draft[keyPath:key] },set: { model.draft[keyPath:key] = $0;model.markIdentityFieldEdited(key == \.episodeTitle ? "episode_title" : "title") }),prompt: Text(identityMixed(key) ? "Multiple Values" : "")).labelsHidden()
-                Button { model.catalogKind = searchKind == "show" ? "tv" : model.draft.kind == "movie" ? "movie" : "tv"; model.searchText = model.draft[keyPath:key]; search = searchKind } label: { Image(systemName: "magnifyingglass.circle.fill") }.buttonStyle(.plain)
+                Button { model.catalogKind = searchKind == "show" ? "tv" : model.draft.kind == "movie" ? "movie" : "tv"; model.searchText = model.draft[keyPath:key]; search = searchKind } label: { Image(systemName: "magnifyingglass.circle.fill") }.buttonStyle(.plain).help("Search catalog for \(title)").accessibilityLabel("Search catalog for \(title)")
                     .popover(isPresented: Binding(get: { search == searchKind },set: { if !$0 { search = nil } })) {
                         VStack(alignment: .leading,spacing: 12) {
                             CatalogSearchView(model: model)
@@ -188,7 +188,7 @@ struct InspectorView: View {
         Binding(get: { model.draftDirect.tracks.first { $0.index == stream.index } ?? TrackChoice(index:stream.index,language:stream.language,default:stream.isDefault,forced:stream.forced) },set: { value in model.draftDirect.tracks.removeAll { $0.index == stream.index }; model.draftDirect.tracks.append(value); model.draftDirect.tracks.sort { $0.index < $1.index }; model.scheduleAutosave() })
     }
     private func path(_ label: String,_ value: String) -> some View {
-        row(label) { HStack { Text(value).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity,alignment: .leading); Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value,forType:.string) } label: { Image(systemName:"doc.on.doc") }; Button { model.reveal(value) } label: { Image(systemName:"folder") } } }
+        row(label) { HStack { Text(value).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity,alignment: .leading); Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value,forType:.string) } label: { Image(systemName:"doc.on.doc") }.help("Copy path to clipboard").accessibilityLabel("Copy \(label) path"); Button { model.reveal(value) } label: { Image(systemName:"folder") }.help("Reveal in Finder").accessibilityLabel("Reveal \(label) in Finder") } }
     }
     private func row<Content:View>(_ title: String,@ViewBuilder content: ()->Content) -> some View { HStack(alignment:.firstTextBaseline,spacing:10) { Text(title).foregroundStyle(.secondary).frame(width:145,alignment:.trailing); content().frame(maxWidth:.infinity,alignment:.leading) }.textFieldStyle(.roundedBorder).font(.callout) }
     private func section<Content:View>(_ title:String,@ViewBuilder content:()->Content) -> some View { VStack(alignment:.leading,spacing:10) { Text(title).font(.headline).foregroundStyle(.secondary); content() } }
@@ -201,7 +201,7 @@ private struct ArtworkPicker: View {
         VStack(alignment:.leading,spacing:12) {
             Text(model.draft.kind == "tv" ? "Show artwork · Display only" : "Movie posters").font(.headline)
             ScrollView { LazyVGrid(columns:[GridItem(.adaptive(minimum:100))],spacing:12) { ForEach(model.artworkCandidates,id:\.self) { url in
-                Button { Task { await model.selectArtwork(url) } } label: { CatalogArtworkView(model:model,url:url).frame(width:105,height:145) }.buttonStyle(.plain)
+                Button { Task { await model.selectArtwork(url) } } label: { CatalogArtworkView(model:model,url:url).frame(width:105,height:145) }.buttonStyle(.plain).accessibilityLabel("Select artwork candidate")
             } } }.frame(height:340)
             Button("Choose Local Image…") { model.chooseLocalPoster() }
         }.padding(16).frame(width:390).task { await model.loadArtwork() }

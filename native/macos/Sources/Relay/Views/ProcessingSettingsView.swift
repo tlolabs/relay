@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import ServiceManagement
 import RelayKit
+import UserNotifications
 
 struct ProcessingSettingsView: View {
     @Bindable var model: RelayModel
@@ -13,6 +14,7 @@ struct ProcessingSettingsView: View {
     @State private var token = ""
     @State private var braveToken = ""
     @State private var sourceTab = "TMDB"
+    @State private var notificationPermission = NotificationPermissionModel()
     @AppStorage("metadataLanguage") private var language = "en-US"
     @AppStorage("defaultStreaming") private var streaming = true
     @AppStorage("defaultTrash") private var trash = true
@@ -26,7 +28,10 @@ struct ProcessingSettingsView: View {
     var body: some View {
         VStack(spacing:0) {
             HStack(spacing:6) { ForEach([("General","gearshape"),("Processing","film"),("Watch Folders","folder.badge.gearshape"),("Naming","arrow.triangle.branch"),("Connections","network"),("Advanced","wrench.and.screwdriver"),("Credits","film.stack")],id:\.0) { title,icon in
-                Button { tab = title } label: { VStack(spacing:5) { Image(systemName:icon).font(.title2);Text(title).font(.caption) }.frame(width:95,height:55).foregroundStyle(tab == title ? Color.accentColor : .secondary).background(tab == title ? Color.accentColor.opacity(0.12) : Color.clear,in:RoundedRectangle(cornerRadius:8)) }.buttonStyle(.plain)
+                Button { tab = title } label: { VStack(spacing:5) { Image(systemName:icon).font(.title2);Text(title).font(.caption) }.frame(width:95,height:55).foregroundStyle(tab == title ? Color.accentColor : .secondary).background(tab == title ? Color.accentColor.opacity(0.12) : Color.clear,in:RoundedRectangle(cornerRadius:8)) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(title)
+                    .accessibilityAddTraits(tab == title ? [.isButton, .isSelected] : .isButton)
             } }.padding(14).frame(maxWidth:.infinity).background(.bar)
             Divider()
             Group {
@@ -43,6 +48,10 @@ struct ProcessingSettingsView: View {
         }.frame(width:820,height:680)
             .onAppear { roots = model.snapshot?.config?.roots ?? []; output = model.snapshot?.config?.outputFolder ?? ""; recursive = model.snapshot?.config?.recursive ?? false; syncSettingsTab(); Task { await model.loadNaming() } }
             .onChange(of: model.settingsTab) { _, _ in syncSettingsTab() }
+            .task { if !model.smokeMode { await notificationPermission.refresh() } }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                if !model.smokeMode { Task { await notificationPermission.refresh() } }
+            }
     }
     private func syncSettingsTab() {
         if model.settingsTab == "credits" { tab = "Credits" }
@@ -54,7 +63,17 @@ struct ProcessingSettingsView: View {
     private var general: some View {
         Form {
             Section("Defaults") { Text("Update Metadata and Rename"); Text("Destination: \(model.snapshot?.config?.outputFolder ?? "Choose in Processing")").textSelection(.enabled); Picker("Metadata Language",selection:$language) { Text("English").tag("en-US");Text("French").tag("fr-FR");Text("German").tag("de-DE");Text("Spanish").tag("es-ES") }; Text("Content Ratings: United States"); Text("TV artwork: display only · Movie artwork: embed selected poster").font(.caption).foregroundStyle(.secondary) }
-            Section("Attention") { Toggle("Notifications",isOn:$notifications); Button("Enable Notifications…") { Task { _ = try? await AttentionService.requestPermission() } }; Toggle("Sound",isOn:$sound);Toggle("Dock badge",isOn:$badge);Toggle("Dock bounce",isOn:$bounce);Toggle("Open window for attention",isOn:$openAttention) }
+            Section("Attention") {
+                Toggle("Notifications",isOn:$notifications)
+                Text(notificationPermission.message).font(.callout).foregroundStyle(.primary)
+                if notificationPermission.status == .denied {
+                    Button("Open Notification Settings…") { AttentionService.openNotificationSettings() }
+                } else {
+                    Button("Enable Notifications…") { Task { await notificationPermission.request() } }
+                        .disabled(notificationPermission.checking || notificationPermission.status == .authorized)
+                }
+                Toggle("Sound",isOn:$sound);Toggle("Dock badge",isOn:$badge);Toggle("Dock bounce",isOn:$bounce);Toggle("Open window for attention",isOn:$openAttention)
+            }
             Section("Startup") { Toggle("Open at login",isOn:Binding(get:{ SMAppService.mainApp.status == .enabled },set:{ value in do { if value { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { model.error = error.localizedDescription } })); Text("Relay stays in the menu bar to monitor watched folders.").font(.caption).foregroundStyle(.secondary) }
         }.formStyle(.grouped)
     }
@@ -74,7 +93,7 @@ struct ProcessingSettingsView: View {
     private var folders: some View {
         Form {
             Toggle("Monitor watched folders",isOn:$watch)
-            Section("Folders") { ForEach(roots,id:\.self) { root in HStack { Text(root).textSelection(.enabled);Spacer();Button { roots.removeAll { $0 == root } } label:{ Image(systemName:"minus.circle") } } };Button("Add Folder…") { if let path = chooseFolder(), !roots.contains(path) { roots.append(path) } };Toggle("Include subfolders",isOn:$recursive);Button("Save Watch Folders") { saveFolders() }.disabled(roots.isEmpty || output.isEmpty) }
+            Section("Folders") { ForEach(roots,id:\.self) { root in HStack { Text(root).textSelection(.enabled);Spacer();Button { roots.removeAll { $0 == root } } label:{ Image(systemName:"minus.circle") }.help("Remove watch folder").accessibilityLabel("Remove watch folder \(root)") } };Button("Add Folder…") { if let path = chooseFolder(), !roots.contains(path) { roots.append(path) } };Toggle("Include subfolders",isOn:$recursive);Button("Save Watch Folders") { saveFolders() }.disabled(roots.isEmpty || output.isEmpty) }
             Text("New videos are identified and added to the queue. When downloads are finished, confirm their identities and press Review… to check the batch before approving processing.").font(.callout).foregroundStyle(.secondary)
         }.formStyle(.grouped)
     }
@@ -97,7 +116,7 @@ struct ProcessingSettingsView: View {
         }
     }
     private var advanced: some View {
-        Form { Section("Diagnostics") { Button("Export Relay Journal…") { model.exportLogs() };Button("Clear Public Metadata Cache") { model.clearPublicCache() };Text("Jobs, credentials, retained subtitles and the local IMDb index are preserved.").font(.caption).foregroundStyle(.secondary) };Section("About") { Text("RELAY 0.2.2 · Intel macOS 14+");Text("Direct metadata tagging, naming and stream-preserving processing.");Text("Dependency versions and complete build provenance are included in the app’s Resources folder.").font(.caption).foregroundStyle(.secondary) } }.formStyle(.grouped)
+        Form { Section("Diagnostics") { Button("Export Relay Journal…") { model.exportLogs() };Button("Clear Public Metadata Cache") { model.clearPublicCache() };Text("Jobs, credentials, retained subtitles and the local IMDb index are preserved.").font(.caption).foregroundStyle(.secondary) };Section("About") { Text("RELAY 0.2.3 · Intel macOS 14+");Text("Direct metadata tagging, naming and stream-preserving processing.");Text("Dependency versions and complete build provenance are included in the app’s Resources folder.").font(.caption).foregroundStyle(.secondary) } }.formStyle(.grouped)
     }
     private func chooseFolder()->String? { let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;panel.canCreateDirectories=true;return panel.runModal() == .OK ? panel.url?.path : nil }
     private var dependencyVersions: String {

@@ -99,11 +99,34 @@ final class RelayModel {
     var inspectingIds = Set<String>()
     var savingDraft = false
     var autosaveTask: Task<Void,Never>?
+    @ObservationIgnored var selectionTask: Task<Void, Never>?
+    @ObservationIgnored var draftSaveWaiters: [CheckedContinuation<Void, Never>] = []
     var processingTask: Task<Void,Never>?
     var processingMessage: String?
     let processor = DirectProcessor()
     let inspectorProcessor = DirectProcessor()
-    var posterCache: [String: Data] = [:]
+    @ObservationIgnored private var posterCache = PosterDataCache()
+    var cachedPosterCount: Int { posterCache.count }
+    var cachedPosterBytes: Int { posterCache.byteCount }
+
+    func cachedPoster(for url: String) -> Data? { posterCache.data(for: url) }
+
+    func cachePoster(_ data: Data, for url: String) {
+        posterCache.insert(data, for: url)
+    }
+
+    func posterData(for url: URL) async throws -> Data {
+        try Task.checkCancellation()
+        if let data = cachedPoster(for: url.absoluteString) { return data }
+        let data = try await catalog.poster(url: url)
+        try Task.checkCancellation()
+        cachePoster(data, for: url.absoluteString)
+        return data
+    }
+
+    func clearPosterCache() {
+        posterCache.removeAll()
+    }
     var draftSubtitles: [Subtitle] = []
     var editingId: String?
     var draftRevision: UInt64 = 0
@@ -172,6 +195,11 @@ final class RelayModel {
         return visibleJobs.filter { $0.editable && $0.included && (selection.isEmpty || selection.contains($0.id)) }.map(\.id)
     }
     var selectedQueueJobs: [RelayJob] { visibleJobs.filter { selectedIds.contains($0.id) } }
+    /// Navigation can run ahead of the saved editor; subsequent input must build
+    /// on that requested selection, while preview/removal use confirmed rows.
+    var requestedQueueSelection: Set<String> {
+        selectionTask != nil && pendingGroup == nil ? pendingSelection ?? selectedIds : selectedIds
+    }
     var canRemoveSelectedJobs: Bool {
         !busy && !savingDraft && !selectedQueueJobs.isEmpty && selectedQueueJobs.allSatisfy(\.removable)
     }
@@ -196,8 +224,23 @@ final class RelayModel {
     var attentionCount: Int { jobs.filter { $0.needsAttention || $0.editable && $0.included }.count }
 
     func selectJobs(_ ids: Set<String>, in nextGroup: String? = nil) {
-        if !smokeMode, hasUnsavedChanges, !savingDraft {
-            Task { await persistDraft(); if !hasUnsavedChanges { if let nextGroup { group = nextGroup }; selectedIds = ids; loadDraft() } }; return
+        if !smokeMode, hasUnsavedChanges || savingDraft || selectionTask != nil {
+            pendingSelection = ids; pendingGroup = nextGroup
+            autosaveTask?.cancel()
+            guard selectionTask == nil else { return }
+            selectionTask = Task {
+                defer { selectionTask = nil }
+                repeat {
+                    guard await persistDraft() else { return }
+                } while hasUnsavedChanges && !closing
+                guard !hasUnsavedChanges, !closing, let selection = pendingSelection else { return }
+                let destination = pendingGroup
+                pendingSelection = nil; pendingGroup = nil
+                if let destination { group = destination }
+                selectedIds = selection
+                loadDraft()
+            }
+            return
         }
         if hasUnsavedChanges && (nextGroup != nil || editingId.map { !ids.contains($0) } == true) {
             pendingSelection = ids; pendingGroup = nextGroup; confirmingNavigation = true
@@ -279,6 +322,7 @@ final class RelayModel {
         if completedRetention == .removeImmediately, result.jobs.contains(where: { $0.state == "complete" && !$0.needsAttention }) {
             result = try await engine.execute(["command": "clear_completed"])
         }
+        let preserveEditor = hadEdits || hasUnsavedChanges
         snapshot = result
         if discover { await prepareLocalEvidence() }
         let attention = Set(result.jobs.filter { $0.needsAttention || $0.editable && $0.included }.map { "\($0.id):\($0.state)" })
@@ -289,7 +333,7 @@ final class RelayModel {
         }
         previousAttention = attention; hasLoadedAttention = true
         selectedIds.formIntersection(Set(visibleJobs.map(\.id)))
-        if !hadEdits, !savingDraft, priorState != selectedJob?.state { loadDraft() }
+        if !preserveEditor, !hasUnsavedChanges, !savingDraft, priorState != selectedJob?.state { loadDraft() }
         if discover { beginFolderSearchIfNeeded() }
         if !smokeMode, let job = selectedJob, job.editable, job.options.inspection == nil, !hasUnsavedChanges { Task { await self.inspectSelected() } }
     }
@@ -445,6 +489,7 @@ final class RelayModel {
         videoImportTask?.cancel(); if let task = videoImportTask { await task.value }
         pendingVideoURLs = []
         autosaveTask?.cancel(); await persistDraft()
+        if let selectionTask { await selectionTask.value }
         cancelProcessing(); if let processingTask { await processingTask.value }
         imdbImportTask?.cancel(); if let task = imdbImportTask { await task.value }
         await pauseSampler()

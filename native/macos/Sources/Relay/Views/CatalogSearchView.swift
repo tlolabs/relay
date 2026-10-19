@@ -24,7 +24,7 @@ struct CatalogSearchView: View {
                 Button("Search") { model.beginCatalogSearch() }
                 if model.catalogBusy {
                     ProgressView().controlSize(.small)
-                    Button { model.cancelCatalogSearch(); model.catalogMessage = "Search stopped. Matches already found remain available." } label: { Image(systemName: "xmark.circle") }.help("Stop searching")
+                    Button { model.cancelCatalogSearch(); model.catalogMessage = "Search stopped. Matches already found remain available." } label: { Image(systemName: "xmark.circle") }.help("Stop searching").accessibilityLabel("Stop searching")
                 }
             }
             if model.catalogKind == "tv" {

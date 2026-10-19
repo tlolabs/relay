@@ -77,9 +77,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.tlolabs.relay</string>
 <key>CFBundleName</key><string>RELAY</string>
 <key>CFBundleDisplayName</key><string>RELAY</string>
-<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleVersion</key><string>5</string>
 <key>CFBundleIconFile</key><string>Relay.icns</string>
-<key>CFBundleShortVersionString</key><string>0.2.2</string>
+<key>CFBundleShortVersionString</key><string>0.2.3</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleDocumentTypes</key><array><dict>
 <key>CFBundleTypeName</key><string>Video</string>

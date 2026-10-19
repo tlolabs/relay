@@ -11,40 +11,154 @@ public struct MediaTools: Sendable {
         }
     }
 }
-/// Serializes external media processes; cancellation terminates the running child.
+
+/// Process callbacks, launch, and stop requests share a queue so cancellation
+/// cannot slip between an isRunning check and launch. No mutable lifecycle state
+/// is accessed off this queue; the detached readers own only their pipe handles.
+private final class MediaProcessOperation: @unchecked Sendable {
+    private enum StopReason { case cancelled, timedOut }
+    private let queue = DispatchQueue(label: "RELAY.media-process.\(UUID().uuidString)")
+    private let process = Process()
+    private let output = Pipe(), errors = Pipe()
+    private let timeout: TimeInterval
+    private var stopReason: StopReason?
+    private var exited = false
+    private var continuation: CheckedContinuation<Data, Error>?
+    private var timer: DispatchWorkItem?
+    private var stdout: Task<Data, Never>?
+    private var stderr: Task<Data, Never>?
+
+    init(tool: URL, arguments: [String], timeout: TimeInterval) {
+        self.timeout = timeout
+        process.executableURL = tool
+        process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(["LC_ALL":"en_US.UTF-8", "LANG":"en_US.UTF-8"]) { _, new in new }
+        process.standardOutput = output
+        process.standardError = errors
+    }
+
+    func cancel() { queue.async { self.stop(.cancelled) } }
+
+    func run() async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { self.launch(continuation) }
+        }
+    }
+
+    private var stopError: Error? {
+        switch stopReason {
+        case .cancelled: return CancellationError()
+        case .timedOut: return RelayFailure.message("Media processing timed out after \(timeout) seconds")
+        case nil: return nil
+        }
+    }
+
+    private func launch(_ continuation: CheckedContinuation<Data, Error>) {
+        self.continuation = continuation
+        if let stopError { complete(.failure(stopError)); return }
+        guard timeout.isFinite, timeout > 0 else {
+            stopReason = .timedOut
+            complete(.failure(stopError!))
+            return
+        }
+        process.terminationHandler = { [weak self] _ in
+            guard let self else { return }
+            self.queue.async { self.didExit() }
+        }
+        do {
+            try process.run()
+            // Drain both streams concurrently: either can exceed a pipe buffer.
+            stdout = Self.read(output.fileHandleForReading)
+            stderr = Self.read(errors.fileHandleForReading)
+            let timer = DispatchWorkItem { [weak self] in self?.stop(.timedOut) }
+            self.timer = timer
+            queue.asyncAfter(deadline: .now() + timeout, execute: timer)
+        } catch {
+            complete(.failure(error))
+        }
+    }
+
+    private static func read(_ handle: FileHandle) -> Task<Data, Never> {
+        Task.detached {
+            // FileHandle's synchronous read must not occupy a cooperative Swift
+            // executor thread while several inspection calls are awaiting output.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    defer { try? handle.close() }
+                    continuation.resume(returning: handle.readDataToEndOfFile())
+                }
+            }
+        }
+    }
+
+    private func stop(_ reason: StopReason) {
+        guard stopReason == nil else { return }
+        stopReason = reason
+        guard !exited, process.isRunning else { return }
+        process.terminate()
+        queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, !self.exited, self.process.isRunning else { return }
+            kill(self.process.processIdentifier, SIGKILL)
+        }
+    }
+
+    private func didExit() {
+        exited = true
+        timer?.cancel()
+        let status = process.terminationStatus
+        guard let stdout, let stderr else { return }
+        Task {
+            let data = await stdout.value, diagnostics = await stderr.value
+            queue.async {
+                if let stopError = self.stopError { self.complete(.failure(stopError)) }
+                else if status != 0 {
+                    let message = String(decoding: diagnostics.suffix(12000), as: UTF8.self)
+                    self.complete(.failure(RelayFailure.message(message.isEmpty ? "Media processing stopped" : message)))
+                } else { self.complete(.success(data)) }
+            }
+        }
+    }
+
+    private func complete(_ result: Result<Data, Error>) {
+        timer?.cancel()
+        timer = nil
+        process.terminationHandler = nil
+        // Also close pipes on launch failure, when there are no readers or child.
+        try? output.fileHandleForWriting.close()
+        try? errors.fileHandleForWriting.close()
+        if stdout == nil { try? output.fileHandleForReading.close() }
+        if stderr == nil { try? errors.fileHandleForReading.close() }
+        stdout = nil
+        stderr = nil
+        continuation?.resume(with: result)
+        continuation = nil
+    }
+}
+
+/// Allows independent media inspections to overlap. Explicit cancellation stops all
+/// active operations and prevents new launches until reset; task cancellation affects
+/// only the operation owned by that task.
 public actor DirectProcessor {
-    private var child: Process?
+    private var operations: [UUID: MediaProcessOperation] = [:]
     private var cancelled = false
     public init() {}
-    public func cancel() { cancelled = true; if let child, child.isRunning { child.terminate(); Self.forceStop(child) } }
-    private nonisolated static func forceStop(_ process: Process) { DispatchQueue.global().asyncAfter(deadline:.now()+1) { if process.isRunning { kill(process.processIdentifier,SIGKILL) } } }
+    public func cancel() {
+        cancelled = true
+        for operation in operations.values { operation.cancel() }
+    }
     public func resetCancellation() { cancelled = false }
     public func run(_ tool: URL, _ args: [String], timeout: TimeInterval = 86400) async throws -> Data {
         guard !cancelled else { throw CancellationError() }
-        let process = Process(); process.executableURL = tool; process.arguments = args
-        process.environment = ProcessInfo.processInfo.environment.merging(["LC_ALL":"en_US.UTF-8","LANG":"en_US.UTF-8"]) { _,new in new }
-        let out = Pipe(), err = Pipe(); process.standardOutput = out; process.standardError = err
-        child = process
+        try Task.checkCancellation()
+        let id = UUID(), operation = MediaProcessOperation(tool: tool, arguments: args, timeout: timeout)
+        operations[id] = operation
+        defer { operations.removeValue(forKey: id) }
         return try await withTaskCancellationHandler(operation: {
-            try await withCheckedThrowingContinuation { continuation in
-                let timer = DispatchWorkItem { if process.isRunning { process.terminate(); Self.forceStop(process) } }
-                // Drain both pipes concurrently so diagnostics cannot deadlock a full pipe.
-                let stdout = Task.detached { out.fileHandleForReading.readDataToEndOfFile() }
-                let stderr = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
-                process.terminationHandler = { finished in
-                    timer.cancel()
-                    Task {
-                        let output = await stdout.value, errors = await stderr.value
-                        guard finished.terminationStatus == 0 else {
-                            continuation.resume(throwing: RelayFailure.message(String(decoding: errors.suffix(12000), as: UTF8.self).isEmpty ? "Media processing stopped" : String(decoding: errors.suffix(12000), as: UTF8.self))); return
-                        }
-                        continuation.resume(returning: output)
-                    }
-                }
-                do { try process.run(); DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer) }
-                catch { out.fileHandleForWriting.closeFile(); err.fileHandleForWriting.closeFile(); timer.cancel(); continuation.resume(throwing: error) }
-            }
-        }, onCancel: { if process.isRunning { process.terminate(); Self.forceStop(process) } })
+            try Task.checkCancellation()
+            let output = try await operation.run()
+            try Task.checkCancellation()
+            return output
+        }, onCancel: { operation.cancel() })
     }
     public func inspect(path: String, tools: MediaTools) async throws -> MediaInspection {
         let raw = try await run(tools.ffprobe, ["-v","error","-show_format","-show_streams","-show_chapters","-of","json",path], timeout: 60)

@@ -1,9 +1,21 @@
 import AppKit
 import UserNotifications
+import RelayKit
 
 @MainActor enum AttentionService {
     static func requestPermission() async throws -> Bool {
-        try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .denied: return false
+        case .authorized, .provisional, .ephemeral: return true
+        default: break
+        }
+        return try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+    }
+    static func openNotificationSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+            NSWorkspace.shared.open(url)
+        }
     }
     static func deliver(count: Int) {
         let defaults = UserDefaults.standard

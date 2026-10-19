@@ -82,9 +82,7 @@ extension RelayModel {
         guard !options.overrides.contains("artwork"), let text = values.artwork.first else { return nil }
         if options.artworkUrl == text, !options.artworkPath.isEmpty, FileManager.default.fileExists(atPath: options.artworkPath) { return options.artworkPath }
         guard let url = URL(string: text), let databaseURL else { throw RelayFailure.message("The artwork storage folder is unavailable.") }
-        let data: Data
-        if let cached = posterCache[text] { data = cached }
-        else { data = try await catalog.poster(url: url); posterCache[text] = data }
+        let data = try await posterData(for: url)
         let folder = databaseURL.deletingLastPathComponent().appendingPathComponent("artwork", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent(UUID().uuidString + ".jpg")
@@ -127,7 +125,7 @@ extension RelayModel {
         let request = UUID(); artworkSelection = request
         let editing = editingId, id = draft.tmdbId
         do {
-            let data = try await catalog.poster(url:url)
+            let data = try await posterData(for: url)
             guard editingId == editing, draft.tmdbId == id, artworkSelection == request else { return }
             let folder = databaseURL.deletingLastPathComponent().appendingPathComponent("artwork",isDirectory:true)
             try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)

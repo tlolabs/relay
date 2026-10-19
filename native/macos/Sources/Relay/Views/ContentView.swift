@@ -18,15 +18,12 @@ struct ContentView: View {
         }
         Divider()
             VStack(alignment: .leading,spacing: 5) {
-                if let error = model.error { HStack { Label(error,systemImage: "exclamationmark.triangle").foregroundStyle(.orange).textSelection(.enabled); Spacer(); Button("Dismiss") { model.error = nil } } }
+                if let error = model.error { HStack { Label(error,systemImage: "exclamationmark.triangle").foregroundStyle(.primary).textSelection(.enabled); Spacer(); Button("Dismiss") { model.error = nil } } }
                 if let activity = model.activityMessages.first { HStack { ProgressView().controlSize(.small); Text(activity).lineLimit(2) } }
                 else { Text(model.savingDraft ? "Saving changes…" : "\(model.jobs.count) videos · \(model.attentionCount) to review").foregroundStyle(.secondary) }
             }.font(.caption).padding(8).frame(maxWidth: .infinity,alignment: .leading).background(.bar)
         }
-        .onChange(of: model.selectedIds) { _, _ in if model.selectedJob?.id != model.editingId { model.loadDraft() } }
-        .onChange(of: model.draft) { _,_ in model.scheduleAutosave() }
-        .onChange(of: model.draftDirect) { _,_ in model.scheduleAutosave() }
-        .onChange(of: model.draftSubtitles) { _,_ in model.scheduleAutosave() }
+        .modifier(DraftAutosaveObservation(model: model))
         .sheet(isPresented: $model.presentingPreview) { BatchPreviewView(model: model) }
         .sheet(item: $model.outputJob) { job in OutputReviewView(model: model,job: job) }
         .confirmationDialog("Save changes before switching videos?",isPresented: $model.confirmingNavigation) {
