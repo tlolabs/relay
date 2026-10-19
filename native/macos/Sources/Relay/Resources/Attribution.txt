@@ -1,4 +1,8 @@
-RELAY 0.1.0 — third-party attribution
+RELAY — third-party attribution
+
+The complete generated technology inventory, source mappings, asset provenance
+and license notices are bundled in Credits/inventory.json and Credits/Notices.txt.
+Open Settings → Credits → Licenses & Notices to search and select those notices.
 
 TMDB API
 This product uses the TMDB API but is not endorsed or certified by TMDB.

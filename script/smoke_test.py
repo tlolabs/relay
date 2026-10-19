@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix="relay-observer-smoke-") as temp:
     events = read_events(log)
     assert events[-1]["event"] == "session_stop", "The app did not finish and flush its capture."
     assert events[0]["schema_version"] == 2
-    assert events[0]["app_version"] == "0.2.1"
+    assert events[0]["app_version"] == "0.2.2"
     assert events[0]["capture_iflicks"] is False, "Smoke must not contact live iFlicks."
     assert all(a["sequence"] + 1 == b["sequence"] for a, b in zip(events, events[1:]))
     kinds = {e["event"] for e in events}

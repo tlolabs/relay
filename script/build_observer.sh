@@ -49,9 +49,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.tlolabs.relay.observer</string>
 <key>CFBundleName</key><string>RELAY Observer</string>
 <key>CFBundleDisplayName</key><string>RELAY Observer</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleVersion</key><string>4</string>
 <key>CFBundleIconFile</key><string>Observer.icns</string>
-<key>CFBundleShortVersionString</key><string>0.2.1</string>
+<key>CFBundleShortVersionString</key><string>0.2.2</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>

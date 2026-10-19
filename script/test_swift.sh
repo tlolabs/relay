@@ -9,6 +9,7 @@ export RUST_LIB_DIR="$ROOT/target/x86_64-apple-darwin/debug"
 cd "$ROOT"
 cargo run --locked -p relay-media-build
 cargo build --locked --workspace --target x86_64-apple-darwin
+python3 "$ROOT/script/generate_credits.py"
 swift test --disable-sandbox --cache-path "$ROOT/build/swiftpm-cache" \
     --config-path "$ROOT/build/swiftpm-config" --security-path "$ROOT/build/swiftpm-security" \
     --package-path "$ROOT/native/macos" --scratch-path "$ROOT/build/swift-x86_64" --arch x86_64 "$@"

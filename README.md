@@ -1,4 +1,4 @@
-# RELAY 0.2.1
+# RELAY 0.2.2
 
 A standalone Intel macOS 14+ replacement for iFlicks (**Update Metadata and Rename** workflow). RELAY identifies TV episodes and movies, acquires and edits metadata, remuxes stream-preserving MP4/M4V outputs using its own bundled media tools (`ffmpeg`, `ffprobe`, and `mediainfo`), writes Apple/QuickTime and extended MP4 tags (`mp4ameta` + `plist`), applies naming templates, optimizes streaming (`faststart`), and publishes retained external subtitles. **RELAY does not require iFlicks to be installed, running, or invoked.** The separate diagnostic [Observer](OBSERVER.md) and legacy 0.1.0 job recovery remain available for historical reference.
 
@@ -35,6 +35,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run --locked -p r
 The standard app builder and Swift test script invoke this dependency build automatically. Tools are signed inside `Contents/Helpers`; the manifest, build receipt, source archives and dependency licenses ship in Resources. To update, change the version, official URL, archive/directory and verified SHA-256 in the manifest, then rebuild and run the media regression fixtures. Source/configuration/compiler changes invalidate the build cache; versions never update silently. `RELAY_BUILD_JOBS` controls compiler parallelism.
 
 ## Metadata sources and budgets
+
+**Settings → Credits** rolls through the projects behind RELAY, ordered by measured RELAY integration lines, with local attribution logos and an iFlicks thank-you. Pause/Play, Replay and the searchable **Licenses & Notices** viewer stay available below the roll. Pointer/keyboard interaction pauses motion; manual scrolling stays paused until Play. Reduce Motion and VoiceOver use manual scrolling. Counts include nonblank production source lines and comments, assign shared code once, and exclude tests, generated code, third-party source and the credits feature. Indirect dependencies show zero *direct integration* lines, not zero library code. The packaging workflow generates `Credits/inventory.json` (including source mappings, dependency versions and artwork provenance) and complete offline notices before signing. To inspect or verify that inventory without packaging, run `python3 script/generate_credits.py` and `python3 script/test_credits.py`; inputs live in the app’s `Resources/Credits/catalog.json` and the pinned dependency sources. Missing source mappings, licenses or logos fail generation instead of silently omitting credits.
 
 During catalog search, the queue shows the filenames currently participating and marks their rows with the active providers. Providers can search different files concurrently; shared show-catalog checks mark all participating files. Search indicators stay attached to their files when selection changes and clear on completion or cancellation.
 

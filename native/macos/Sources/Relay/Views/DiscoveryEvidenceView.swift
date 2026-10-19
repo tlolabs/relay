@@ -4,9 +4,16 @@ import RelayKit
 struct DiscoverySourceLinks: View {
     let evidence: [DiscoveryEvidence]
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(Array(Set(evidence.map(\.source))).sorted { $0.rawValue < $1.rawValue }, id: \.self) { source in
-                Link(source.rawValue, destination: source.website)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                ForEach(Array(Set(evidence.map(\.source))).sorted { $0.rawValue < $1.rawValue }, id: \.self) { source in
+                    Link(source.rawValue, destination: source.website)
+                }
+            }
+            if evidence.contains(where: { $0.source == .tvdb }) {
+                Link("Metadata provided by TheTVDB. Please consider adding missing information or subscribing.",
+                     destination: URL(string: "https://thetvdb.com")!)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }.font(.caption)
     }

@@ -1,0 +1,318 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "foundation",
+      "name": "Swift, Rust & the native macOS foundation",
+      "url": "https://www.swift.org/",
+      "stat": "{count} lines keeping the whole production on its feet.",
+      "files": [],
+      "notice": "Built with Swift and Rust using Apple’s macOS frameworks and system runtimes. Apple, Swift and their marks belong to Apple Inc.; Rust marks belong to their respective owners. No sponsorship or endorsement is implied. System frameworks are supplied by macOS.",
+      "components": [
+        {
+          "name": "Rust",
+          "url": "https://www.rust-lang.org/"
+        },
+        {
+          "name": "SwiftUI & AppKit",
+          "url": "https://developer.apple.com/documentation/swiftui"
+        },
+        {
+          "name": "Foundation & Observation",
+          "url": "https://developer.apple.com/documentation/foundation"
+        },
+        {
+          "name": "AVFoundation & VideoToolbox",
+          "url": "https://developer.apple.com/documentation/avfoundation"
+        },
+        {
+          "name": "Quick Look & QuickLookThumbnailing",
+          "url": "https://developer.apple.com/documentation/quicklookthumbnailing"
+        },
+        {
+          "name": "Security / Keychain & CryptoKit",
+          "url": "https://developer.apple.com/documentation/security"
+        },
+        {
+          "name": "ServiceManagement & UserNotifications",
+          "url": "https://developer.apple.com/documentation/servicemanagement"
+        },
+        {
+          "name": "UniformTypeIdentifiers",
+          "url": "https://developer.apple.com/documentation/uniformtypeidentifiers"
+        },
+        {
+          "name": "Carbon / Apple Events (legacy compatibility)",
+          "url": "https://developer.apple.com/documentation/coreservices/apple_events"
+        },
+        {
+          "name": "CoreFoundation, CoreMedia, CoreVideo & CoreServices",
+          "url": "https://developer.apple.com/documentation/coremedia"
+        },
+        {
+          "name": "Darwin / POSIX & C/C++ runtimes",
+          "url": "https://opensource.apple.com/"
+        }
+      ],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "tmdb",
+      "name": "TMDB — The Movie Database",
+      "url": "https://www.themoviedb.org",
+      "stat": "{count} lines helping your episodes find their names.",
+      "files": [
+        "native/macos/Sources/RelayKit/CatalogClient.swift",
+        "native/macos/Sources/RelayKit/FullMetadata.swift",
+        "native/macos/Sources/RelayKit/Discovery/TMDBDiscoveryResolver.swift",
+        "native/macos/Sources/Relay/Services/CatalogActions.swift"
+      ],
+      "notice": "This product uses the TMDB API but is not endorsed or certified by TMDB.\nhttps://developer.themoviedb.org/docs/faq",
+      "components": [],
+      "indirect": null,
+      "logo": {
+        "file": "Logos/tmdb.svg",
+        "source": "https://commons.wikimedia.org/wiki/File:Tmdb.new.logo.svg",
+        "terms": "Travis Bell; unchanged logo, original colors and proportions. CC BY-SA 4.0. Approved TMDB mark; https://www.themoviedb.org/about/logos-attribution"
+      },
+      "version": null
+    },
+    {
+      "id": "trakt",
+      "name": "Trakt",
+      "url": "https://trakt.tv",
+      "stat": "{count} lines following another trail to the right title.",
+      "files": [
+        "native/macos/Sources/RelayKit/Discovery/TraktDiscovery.swift"
+      ],
+      "notice": "Discovery evidence provided by Trakt. Trakt is not a sponsor of RELAY. API and branding policies: https://developer.trakt.tv/docs/api-use-policy",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "omdb",
+      "name": "OMDb — The Open Movie Database",
+      "url": "https://www.omdbapi.com/",
+      "stat": "{count} lines asking one more movie expert.",
+      "files": [
+        "native/macos/Sources/RelayKit/Discovery/OMDbDiscovery.swift"
+      ],
+      "notice": "OMDb API by Brian Fritz. Content licensed under CC BY-NC 4.0: https://creativecommons.org/licenses/by-nc/4.0/ . OMDb is not endorsed by or affiliated with IMDb. https://www.omdbapi.com/",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "tvmaze",
+      "name": "TVmaze",
+      "url": "https://www.tvmaze.com",
+      "stat": "{count} lines finding a way through the episode maze.",
+      "files": [
+        "native/macos/Sources/RelayKit/Discovery/TVmazeDiscovery.swift"
+      ],
+      "notice": "TV data provided by TVmaze under CC BY-SA. https://www.tvmaze.com/api#licensing . https://creativecommons.org/licenses/by-sa/4.0/",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "tvdb",
+      "name": "TheTVDB",
+      "url": "https://thetvdb.com",
+      "stat": "{count} lines consulting another television encyclopedia.",
+      "files": [
+        "native/macos/Sources/RelayKit/Discovery/TVDBDiscovery.swift"
+      ],
+      "notice": "Metadata provided by TheTVDB. Please consider adding missing information or subscribing.\nhttps://www.thetvdb.com/api-information",
+      "components": [],
+      "indirect": null,
+      "logo": {
+        "file": "Logos/tvdb.png",
+        "source": "https://www.thetvdb.com/images/attribution/logo1.png",
+        "terms": "Official attribution logo supplied at https://www.thetvdb.com/api-information . Used unchanged for linked source attribution; trademark rights remain with TheTVDB.",
+        "backdrop": "dark"
+      },
+      "version": null
+    },
+    {
+      "id": "imdb",
+      "name": "IMDb Non-Commercial Datasets",
+      "url": "https://data.imdb.com/non-commercial-datasets/",
+      "stat": "{count} lines turning a local index into a casting call.",
+      "files": [
+        "native/macos/Sources/RelayKit/Discovery/IMDbIndex.swift"
+      ],
+      "notice": "Information courtesy of IMDb (https://www.imdb.com). Used with permission.\nOptional, user-imported title.basics and title.episode datasets for personal and non-commercial use. No paid IMDb API is used.\nDataset documentation: https://data.imdb.com/non-commercial-datasets/\nCopyright / license: https://www.imdb.com/interfaces/\nNon-commercial licensing: https://help.imdb.com/article/imdb/general-information/can-i-use-imdb-data-in-my-software/G5JTRESSHJBBHTGX",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "brave",
+      "name": "Brave Search",
+      "url": "https://search.brave.com/",
+      "stat": "{count} lines searching for the show behind the clue.",
+      "files": [],
+      "notice": "Optional discovery uses Brave Search API. https://brave.com/search/api/ . No Brave browser is bundled.",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "plex",
+      "name": "Plex",
+      "url": "https://www.plex.tv/",
+      "stat": "{count} lines checking what is already on your shelves.",
+      "files": [
+        "native/macos/Sources/RelayKit/PlexConnection.swift",
+        "native/macos/Sources/RelayKit/LocalLibrary.swift",
+        "native/macos/Sources/Relay/Services/PlexActions.swift",
+        "native/macos/Sources/Relay/Views/PlexLibrarySettings.swift",
+        "native/macos/Sources/Relay/Views/PlexSettingsView.swift"
+      ],
+      "notice": "Read-only access to the user’s Plex library. Plex software and marks belong to Plex; no affiliation or endorsement is implied.",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "media",
+      "name": "FFmpeg, ffprobe & MediaInfo",
+      "url": "https://ffmpeg.org/",
+      "stat": "{count} lines giving your video a careful change of container.",
+      "files": [
+        "native/macos/Sources/RelayKit/MediaTools.swift",
+        "native/macos/Sources/RelayKit/MP4Artwork.swift",
+        "native/macos/Sources/RelayKit/OutputInspector.swift"
+      ],
+      "notice": "FFmpeg / ffprobe: LGPL version 2.1 or later; GPL and nonfree components are disabled in RELAY’s pinned build. https://ffmpeg.org/legal.html\nThis product uses MediaInfo library, Copyright (c) 2002-2025 MediaArea.net SARL. https://mediaarea.net/MediaInfo\nExact dependency licenses and source archives are included in the app’s Resources/DependencyLicenses and Resources/DependencySources folders.",
+      "components": [
+        {
+          "name": "MediaInfo / MediaInfoLib",
+          "url": "https://mediaarea.net/MediaInfo"
+        }
+      ],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "tags",
+      "name": "mp4ameta & plist",
+      "url": "https://github.com/Saecki/rust-mp4ameta",
+      "stat": "{count} lines putting names, credits and artwork in their places.",
+      "files": [],
+      "notice": "MP4 metadata uses mp4ameta (MIT OR Apache-2.0) and plist (MIT). Apple credit and rating property lists share the tag-processing integration. Exact notices follow in Licenses & Notices.",
+      "components": [
+        {
+          "name": "plist",
+          "url": "https://github.com/ebarnard/rust-plist/"
+        }
+      ],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "sqlite",
+      "name": "SQLite",
+      "url": "https://sqlite.org/",
+      "stat": "{count} lines making sure the next act remembers the last.",
+      "files": [
+        "crates/relay-core/src/database.rs"
+      ],
+      "notice": "RELAY uses the SQLite library supplied by macOS. SQLite is in the public domain. https://sqlite.org/copyright.html",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "serde",
+      "name": "Serde & serde_json",
+      "url": "https://serde.rs/",
+      "stat": "{count} lines giving Rust data a common language.",
+      "files": [
+        "crates/relay-core/src/model.rs"
+      ],
+      "notice": "Serde and serde_json are licensed under MIT OR Apache-2.0. Shared serialization calls in other integrations remain attributed to those integrations; this count covers the dedicated model definitions.",
+      "components": [
+        {
+          "name": "serde_json",
+          "url": "https://github.com/serde-rs/json"
+        }
+      ],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "shared",
+      "name": "Shared discovery, transport & caching",
+      "url": "https://developer.apple.com/documentation/foundation/urlsession",
+      "stat": "{count} shared lines keeping every source on the same page.",
+      "files": [
+        "native/macos/Sources/RelayKit/APITransport.swift",
+        "native/macos/Sources/RelayKit/APIUsageStore.swift",
+        "native/macos/Sources/RelayKit/APIProvider.swift",
+        "native/macos/Sources/RelayKit/TVSearch.swift",
+        "native/macos/Sources/RelayKit/Discovery/ProviderHTTP.swift",
+        "native/macos/Sources/RelayKit/Discovery/ConnectionChecks.swift",
+        "native/macos/Sources/RelayKit/Discovery/DiscoveryModels.swift",
+        "native/macos/Sources/RelayKit/Discovery/MetadataDiscoveryClient.swift",
+        "native/macos/Sources/RelayKit/Discovery/DiscoverySearchActivity.swift",
+        "native/macos/Sources/RelayKit/MatchConfidence.swift"
+      ],
+      "notice": "RELAY’s own shared provider infrastructure, built on Foundation / URLSession, CryptoKit and SQLite. Shared lines are counted here once, rather than repeated for each source.",
+      "components": [],
+      "indirect": null,
+      "logo": null,
+      "version": null
+    },
+    {
+      "id": "zenlib",
+      "name": "ZenLib",
+      "url": "https://github.com/MediaArea/ZenLib",
+      "stat": "",
+      "files": [],
+      "notice": "ZenLib, Copyright (c) 2002-2025 MediaArea.net SARL. zlib license.",
+      "components": [],
+      "indirect": "MediaInfo",
+      "logo": null,
+      "version": "0.4.41"
+    },
+    {
+      "id": "zlib",
+      "name": "zlib",
+      "url": "https://zlib.net/",
+      "stat": "",
+      "files": [],
+      "notice": "MediaInfo links the zlib library supplied by macOS. https://zlib.net/zlib_license.html",
+      "components": [],
+      "indirect": "MediaInfo",
+      "logo": null,
+      "version": "Supplied by macOS"
+    }
+  ],
+  "inspiration": {
+    "name": "iFlicks",
+    "url": "https://iflicks.app/",
+    "text": "Inspired by iFlicks and its thoughtful approach to preparing, tagging and organizing video libraries. Thank you to Jendrik Bertram for the inspiration."
+  },
+  "excludedDeclarations": {
+    "native/macos/Sources/Relay/Views/ProcessingSettingsView.swift": [
+      "    var creditsResourceDirectory:",
+      "                case \"Credits\":",
+      "        if model.settingsTab == \"credits\""
+    ]
+  }
+}

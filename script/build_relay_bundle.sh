@@ -63,6 +63,7 @@ fi
 cp "$ROOT_DIR/build/Relay.icns" "$APP_BUNDLE/Contents/Resources/Relay.icns"
 cp "$ROOT_DIR/native/macos/Sources/Relay/Resources/tmdb.svg" "$APP_BUNDLE/Contents/Resources/TMDB.svg"
 cp "$ROOT_DIR/native/macos/Sources/Relay/Resources/Attribution.txt" "$APP_BUNDLE/Contents/Resources/Attribution.txt"
+/usr/bin/python3 "$ROOT_DIR/script/generate_credits.py" --output "$APP_BUNDLE/Contents/Resources/Credits"
 install_name_tool -id '@rpath/librelay_core.dylib' "$APP_BUNDLE/Contents/Frameworks/librelay_core.dylib"
 install_name_tool -delete_rpath "$RUST_LIB_DIR" "$APP_BUNDLE/Contents/MacOS/Relay" 2>/dev/null || true
 RUST_LINK="$(otool -L "$APP_BUNDLE/Contents/MacOS/Relay" | awk '/librelay_core[.]dylib/{print $1;exit}')"
@@ -76,9 +77,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.tlolabs.relay</string>
 <key>CFBundleName</key><string>RELAY</string>
 <key>CFBundleDisplayName</key><string>RELAY</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleVersion</key><string>4</string>
 <key>CFBundleIconFile</key><string>Relay.icns</string>
-<key>CFBundleShortVersionString</key><string>0.2.1</string>
+<key>CFBundleShortVersionString</key><string>0.2.2</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleDocumentTypes</key><array><dict>
 <key>CFBundleTypeName</key><string>Video</string>

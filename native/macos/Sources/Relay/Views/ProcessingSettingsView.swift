@@ -5,6 +5,7 @@ import RelayKit
 
 struct ProcessingSettingsView: View {
     @Bindable var model: RelayModel
+    var creditsResourceDirectory: URL? = nil
     @State private var tab = "General"
     @State private var roots: [String] = []
     @State private var output = ""
@@ -24,7 +25,7 @@ struct ProcessingSettingsView: View {
     @AppStorage("openForAttention") private var openAttention = false
     var body: some View {
         VStack(spacing:0) {
-            HStack(spacing:6) { ForEach([("General","gearshape"),("Processing","film"),("Watch Folders","folder.badge.gearshape"),("Naming","arrow.triangle.branch"),("Connections","network"),("Advanced","wrench.and.screwdriver")],id:\.0) { title,icon in
+            HStack(spacing:6) { ForEach([("General","gearshape"),("Processing","film"),("Watch Folders","folder.badge.gearshape"),("Naming","arrow.triangle.branch"),("Connections","network"),("Advanced","wrench.and.screwdriver"),("Credits","film.stack")],id:\.0) { title,icon in
                 Button { tab = title } label: { VStack(spacing:5) { Image(systemName:icon).font(.title2);Text(title).font(.caption) }.frame(width:95,height:55).foregroundStyle(tab == title ? Color.accentColor : .secondary).background(tab == title ? Color.accentColor.opacity(0.12) : Color.clear,in:RoundedRectangle(cornerRadius:8)) }.buttonStyle(.plain)
             } }.padding(14).frame(maxWidth:.infinity).background(.bar)
             Divider()
@@ -35,6 +36,7 @@ struct ProcessingSettingsView: View {
                 case "Watch Folders": folders
                 case "Naming": naming
                 case "Connections": connections
+                case "Credits": CreditsView(resourceDirectory: creditsResourceDirectory)
                 default: advanced
                 }
             }.frame(maxWidth:.infinity,maxHeight:.infinity)
@@ -43,6 +45,7 @@ struct ProcessingSettingsView: View {
             .onChange(of: model.settingsTab) { _, _ in syncSettingsTab() }
     }
     private func syncSettingsTab() {
+        if model.settingsTab == "credits" { tab = "Credits" }
         if ["plex","sources","usage","connections"].contains(model.settingsTab) {
             tab = "Connections"
             sourceTab = model.settingsTab == "plex" ? "Plex" : model.settingsTab == "sources" ? "Data Sources" : model.settingsTab == "usage" ? "API Usage" : "TMDB"
@@ -94,7 +97,7 @@ struct ProcessingSettingsView: View {
         }
     }
     private var advanced: some View {
-        Form { Section("Diagnostics") { Button("Export Relay Journal…") { model.exportLogs() };Button("Clear Public Metadata Cache") { model.clearPublicCache() };Text("Jobs, credentials, retained subtitles and the local IMDb index are preserved.").font(.caption).foregroundStyle(.secondary) };Section("About") { Text("RELAY 0.2.1 · Intel macOS 14+");Text("Direct metadata tagging, naming and stream-preserving processing.");Text("Dependency versions and complete build provenance are included in the app’s Resources folder.").font(.caption).foregroundStyle(.secondary) } }.formStyle(.grouped)
+        Form { Section("Diagnostics") { Button("Export Relay Journal…") { model.exportLogs() };Button("Clear Public Metadata Cache") { model.clearPublicCache() };Text("Jobs, credentials, retained subtitles and the local IMDb index are preserved.").font(.caption).foregroundStyle(.secondary) };Section("About") { Text("RELAY 0.2.2 · Intel macOS 14+");Text("Direct metadata tagging, naming and stream-preserving processing.");Text("Dependency versions and complete build provenance are included in the app’s Resources folder.").font(.caption).foregroundStyle(.secondary) } }.formStyle(.grouped)
     }
     private func chooseFolder()->String? { let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;panel.canCreateDirectories=true;return panel.runModal() == .OK ? panel.url?.path : nil }
     private var dependencyVersions: String {

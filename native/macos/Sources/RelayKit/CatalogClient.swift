@@ -38,7 +38,7 @@ public actor CatalogClient {
         if plex {
             request.setValue("com.tlolabs.relay", forHTTPHeaderField: "X-Plex-Client-Identifier")
             request.setValue("RELAY", forHTTPHeaderField: "X-Plex-Product")
-            request.setValue("0.2.1", forHTTPHeaderField: "X-Plex-Version")
+            request.setValue("0.2.2", forHTTPHeaderField: "X-Plex-Version")
         }
         let (data, http) = try await APITransport.send(request, provider: plex ? .plex : .tmdb, session: session, usage: usage)
         guard http.statusCode == 200 else {
